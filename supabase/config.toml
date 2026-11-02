@@ -1,0 +1,36 @@
+project_id = "cadence-linkedin-studio"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.seed]
+enabled = false
+
+[storage]
+enabled = true
+file_size_limit = "8MiB"
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://localhost:3000/api/linkedin/callback"]
+enable_signup = false
+
+[auth.email]
+enable_signup = false
+enable_confirmations = false
+
+[functions.publish-scheduled]
+verify_jwt = true
+
+[functions.cleanup-media]
+verify_jwt = true
