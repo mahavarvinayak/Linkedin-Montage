@@ -96,3 +96,4 @@ Ask your agent:
 > *"Post this announcement to my Founder profile only, and schedule a casual summary on my Personal Creator account for 3 hours later."*
 
 The model will specify the exact `destination_ids` for each post, and the scheduler will use the respective profile's OAuth token automatically.
+

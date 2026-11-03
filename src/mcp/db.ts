@@ -40,3 +40,4 @@ export const adminClient: SupabaseClient = createClient(supabaseUrl ?? "", servi
     autoRefreshToken: false,
   },
 });
+

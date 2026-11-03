@@ -342,3 +342,4 @@ $$;
 
 revoke all on function public.admin_claim_due_jobs(integer, uuid, uuid) from public, anon;
 grant execute on function public.admin_claim_due_jobs(integer, uuid, uuid) to service_role;
+
