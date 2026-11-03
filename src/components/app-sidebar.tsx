@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   AlertTriangle,
+  Bot,
   CalendarClock,
   CheckCircle2,
   Clock3,
@@ -32,6 +33,7 @@ const items = [
   { key: "published", href: "/published", label: "Published Posts", icon: CheckCircle2 },
   { key: "failed", href: "/failed", label: "Failed Posts", icon: AlertTriangle },
   { key: "destinations", href: "/destinations", label: "Destinations", icon: Network },
+  { key: "mcp", href: "/mcp", label: "MCP Server", icon: Bot },
   { key: "settings", href: "/settings", label: "Settings", icon: Settings },
 ] as const;
 
