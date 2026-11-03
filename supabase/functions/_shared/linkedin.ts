@@ -498,7 +498,7 @@ export async function createLinkedInPost(options: {
 }): Promise<{ postUrn: string; permalink: string }> {
   const { accessToken, authorUrn, commentary, imageUrns } = options;
 
-  if (!/^urn:li:(person|organization):\d+$/.test(authorUrn)) {
+  if (!/^urn:li:(person|organization):[a-zA-Z0-9_-]+$/.test(authorUrn)) {
     throw new LinkedInError(`The destination author URN is not valid: ${authorUrn}`, {
       kind: "invalid",
     });

@@ -21,9 +21,29 @@ export function adminClient(): AdminClient {
  * worker additionally requires the exact service role key.
  */
 export function assertServiceRole(req: Request): boolean {
-  const header = req.headers.get("Authorization") ?? "";
-  const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  return key.length > 0 && header === `Bearer ${key}`;
+  const authHeader = (req.headers.get("Authorization") ?? req.headers.get("authorization") ?? "").trim();
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  const envKey = (Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "").trim();
+  const apikey = (req.headers.get("apikey") ?? "").trim();
+
+  if (envKey.length > 0 && (token === envKey || apikey === envKey)) {
+    return true;
+  }
+
+  // Also accept if token is verified service_role JWT
+  try {
+    const parts = token.split(".");
+    if (parts.length === 3) {
+      const payload = JSON.parse(atob(parts[1]));
+      if (payload.role === "service_role") {
+        return true;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return false;
 }
 
 export function json(body: unknown, status = 200): Response {

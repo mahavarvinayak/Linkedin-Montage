@@ -47,7 +47,7 @@ function organizationIdFromUrn(urn: string): string | null {
 }
 
 export function isSupportedAuthorUrn(value: string): boolean {
-  return /^urn:li:(organization|person):\d+$/.test(value.trim());
+  return /^urn:li:(organization|person):[a-zA-Z0-9_-]+$/.test(value.trim());
 }
 
 type AclEntry = {

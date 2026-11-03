@@ -63,8 +63,8 @@ export const manualDestinationSchema = z.object({
     .string()
     .trim()
     .regex(
-      /^urn:li:(organization|person):\d+$/,
-      "Enter a LinkedIn author URN such as urn:li:organization:1234567",
+      /^urn:li:(organization|person):[a-zA-Z0-9_-]+$/,
+      "Enter a LinkedIn author URN such as urn:li:organization:1234567 or urn:li:person:abc",
     ),
   name: z.string().trim().max(120).optional(),
 });
