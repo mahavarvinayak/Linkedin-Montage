@@ -326,6 +326,7 @@ export async function getIntegrationStatus(): Promise<IntegrationStatus> {
   let adminSeeded = false;
   let storageError: string | null = null;
   let destinationStats = { total: 0, selectable: 0, unavailable: 0, missingPermission: 0 };
+  let anyAccountConnected = false;
 
   try {
     settings = await getSettingsRow();
@@ -347,6 +348,13 @@ export async function getIntegrationStatus(): Promise<IntegrationStatus> {
 
     const admins = await admin.from("app_admins").select("*", { count: "exact", head: true });
     adminSeeded = (admins.count ?? 0) > 0;
+
+    const connectedAccounts = await admin
+      .from("linkedin_accounts")
+      .select("*", { count: "exact", head: true })
+      .neq("status", "disconnected");
+
+    anyAccountConnected = (connectedAccounts.count ?? 0) > 0;
   }
 
   const expiresAt = settings?.linkedin_token_expires_at
@@ -358,11 +366,13 @@ export async function getIntegrationStatus(): Promise<IntegrationStatus> {
     expiresAt && expiresAt >= Date.now() && expiresAt < Date.now() + 7 * 24 * 60 * 60 * 1000,
   );
 
-  const linkedinReady =
-    environment.linkedin.configured &&
+  const primaryReady =
     Boolean(settings?.linkedin_connected) &&
     Boolean(settings?.linkedin_member_id) &&
     !tokenExpired;
+
+  const linkedinReady =
+    environment.linkedin.configured && (anyAccountConnected || primaryReady);
 
   return {
     bucketReady,

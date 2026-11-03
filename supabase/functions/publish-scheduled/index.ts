@@ -35,7 +35,7 @@ type Job = {
   media_retention_hours: number;
 };
 
-type Outcome = "published" | "retried" | "failed" | "manual_required";
+type Outcome = "published" | "retried" | "failed" | "manual_required" | "cancelled";
 
 async function log(
   admin: AdminClient,
@@ -120,8 +120,7 @@ async function notifySuccess(
   admin: AdminClient,
   job: Job,
   permalink: string,
-): Promise<void> {
-  const caption = previewText(composeCommentary(job.post_caption, job.post_hashtags) || "(no caption)");
+): Promise<void> {  const caption = previewText(composeCommentary(job.post_caption, job.post_hashtags) || "(no caption)");
 
   await sendTelegram(
     admin,
@@ -250,8 +249,35 @@ async function recordFailure(
   );
 
   await refreshPost(admin, job.post_id);
-  await notifyFailure(admin, job, status, message);
+
+  try {
+    await notifyFailure(admin, job, status, message);
+  } catch (error) {
+    console.error("Could not send failure notification", job.id, error);
+  }
+
   return status;
+}
+
+/**
+ * Cancels a claimed job without publishing. Used when the destination was
+ * deliberately disabled in Cadence after the post had already been scheduled.
+ */
+async function cancelJob(admin: AdminClient, job: Job, message: string): Promise<void> {
+  await admin
+    .from("publishing_jobs")
+    .update({
+      status: "cancelled",
+      last_error: message,
+      next_attempt_at: null,
+      locked_at: null,
+      lock_token: null,
+    })
+    .eq("id", job.id)
+    .eq("lock_token", job.lock_token);
+
+  await log(admin, job, "publish_cancelled", `${job.destination_name}: ${message}`);
+  await refreshPost(admin, job.post_id);
 }
 
 async function publishJob(admin: AdminClient, job: Job, accessToken: string): Promise<Outcome> {
@@ -293,31 +319,48 @@ async function publishJob(admin: AdminClient, job: Job, accessToken: string): Pr
     return recordFailure(admin, job, error);
   }
 
+  let result: { postUrn: string; permalink: string };
   try {
-    const result = await createLinkedInPost({
+    result = await createLinkedInPost({
       accessToken,
       authorUrn: job.author_urn,
       commentary: composeCommentary(job.post_caption, job.post_hashtags),
       imageUrns,
     });
+  } catch (error) {
+    return recordFailure(admin, job, error);
+  }
 
-    const saved = await markPublished(admin, job, result);
-    if (!saved) {
-      return "manual_required";
-    }
+  const saved = await markPublished(admin, job, result);
+  if (!saved) {
+    return "manual_required";
+  }
 
+  // The post already exists on LinkedIn. Logging, refreshing the aggregate and
+  // Telegram are best-effort: a failure here must never mark it as failed.
+  try {
     await log(admin, job, "published", `Published as ${result.postUrn}.`, {
       linkedin_post_id: result.postUrn,
       permalink: result.permalink,
       images: imageUrns.length,
     });
-
-    await refreshPost(admin, job.post_id);
-    await notifySuccess(admin, job, result.permalink);
-    return "published";
   } catch (error) {
-    return recordFailure(admin, job, error);
+    console.error("Could not log published job", job.id, error);
   }
+
+  try {
+    await refreshPost(admin, job.post_id);
+  } catch (error) {
+    console.error("Could not refresh post after publishing", job.post_id, error);
+  }
+
+  try {
+    await notifySuccess(admin, job, result.permalink);
+  } catch (error) {
+    console.error("Could not send success notification", job.id, error);
+  }
+
+  return "published";
 }
 
 Deno.serve(async (req) => {
@@ -341,61 +384,39 @@ Deno.serve(async (req) => {
     console.error("Could not recover stale publishing jobs", recovered.error.message);
   }
 
-  const settingsResult = await admin
-    .from("settings")
-    .select("linkedin_connected, linkedin_member_id, linkedin_last_error, linkedin_token_expires_at")
-    .eq("id", 1)
-    .maybeSingle();
+  // Any connected or refreshable account can service jobs. The legacy settings
+  // row is only consulted when no account rows exist yet (pre-0004 deployments).
+  const accountsResult = await admin
+    .from("linkedin_accounts")
+    .select("member_urn, status")
+    .neq("status", "disconnected");
 
-  if (settingsResult.error) {
-    return json({ error: `Could not read settings: ${settingsResult.error.message}` }, 500);
+  let accounts = accountsResult.data ?? [];
+
+  if (accountsResult.error) {
+    console.error("Could not read linkedin_accounts", accountsResult.error.message);
   }
 
-  const settings = settingsResult.data;
-  if (!settings?.linkedin_connected || !settings.linkedin_member_id) {
-    return json({
-      ok: true,
-      skipped: "linkedin_not_connected",
-      recovered: recovered.data ?? 0,
-    });
-  }
+  if (accounts.length === 0) {
+    const settingsResult = await admin
+      .from("settings")
+      .select("linkedin_connected, linkedin_member_id")
+      .eq("id", 1)
+      .maybeSingle();
 
-  let accessToken: string;
-  try {
-    const identity = await getPublishingIdentity(admin);
-    accessToken = identity.accessToken;
-  } catch (error) {
-    const message = sanitizeError(error);
-    const previous = settings.linkedin_last_error ?? "";
-
-    if (message !== previous) {
-      await admin
-        .from("settings")
-        .update({ linkedin_last_error: message })
-        .eq("id", 1);
-
-      if (!(error instanceof LinkedInError) || error.kind === "token_expired") {
-        await sendTelegram(
-          admin,
-          [
-            "🔑 LinkedIn session needs attention",
-            "",
-            message,
-            "Scheduled destinations are paused until you reconnect from Settings.",
-            dashboardLink("settings"),
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        );
-      }
+    if (settingsResult.error) {
+      return json({ error: `Could not read settings: ${settingsResult.error.message}` }, 500);
     }
 
-    return json({
-      ok: true,
-      skipped: "linkedin_not_ready",
-      reason: message,
-      recovered: recovered.data ?? 0,
-    });
+    if (!settingsResult.data?.linkedin_connected || !settingsResult.data.linkedin_member_id) {
+      return json({
+        ok: true,
+        skipped: "linkedin_not_connected",
+        recovered: recovered.data ?? 0,
+      });
+    }
+
+    accounts = [{ member_urn: settingsResult.data.linkedin_member_id, status: "connected" }];
   }
 
   const limit = requestedJobId ? 1 : requestedPostId ? 25 : 5;
@@ -419,29 +440,96 @@ Deno.serve(async (req) => {
     retried: 0,
     failed: 0,
     manual_required: 0,
+    cancelled: 0,
   };
 
   for (const job of jobs) {
     try {
-      let jobToken = accessToken;
+      // A destination can be disabled or lose permission after the post was
+      // scheduled. Never publish to it silently: cancel a deliberately disabled
+      // destination, and stop for a human when it is no longer authorized.
+      const { data: destination, error: destinationError } = await admin
+        .from("linkedin_destinations")
+        .select("is_enabled, publish_authorized, status, status_detail")
+        .eq("id", job.destination_id)
+        .maybeSingle();
+
+      if (destinationError) {
+        const outcome = await recordFailure(
+          admin,
+          job,
+          new LinkedInError(
+            `Could not read this destination's state: ${destinationError.message}`,
+            { kind: "transient", retryable: true },
+          ),
+        );
+        summary[outcome] += 1;
+        continue;
+      }
+
+      if (destination && !destination.is_enabled) {
+        await cancelJob(
+          admin,
+          job,
+          "Destination is disabled in Cadence, so this job was cancelled. Re-enable it and add it to the post to publish.",
+        );
+        summary.cancelled += 1;
+        continue;
+      }
+
+      if (
+        !destination ||
+        !destination.publish_authorized ||
+        destination.status === "unavailable" ||
+        destination.status === "permission_missing" ||
+        destination.status === "error"
+      ) {
+        const outcome = await recordFailure(
+          admin,
+          job,
+          new LinkedInError(
+            destination?.status_detail ??
+              "This destination is no longer publishable. Refresh destinations in Cadence or reconnect the account that owns it, then retry this destination.",
+            { kind: "permission" },
+          ),
+        );
+        summary[outcome] += 1;
+        continue;
+      }
+
       const targetUrn =
         job.destination_account_urn ||
         (job.destination_type === "personal_profile" ? job.author_urn : null);
-      if (targetUrn) {
-        try {
-          const identity = await getPublishingIdentity(admin, targetUrn);
-          jobToken = identity.accessToken;
-        } catch {
-          // fallback to default accessToken
-        }
+
+      if (!targetUrn) {
+        const outcome = await recordFailure(
+          admin,
+          job,
+          new LinkedInError(
+            "This destination is not linked to a connected LinkedIn account. Refresh destinations in Cadence, then reconnect the account that owns it.",
+            { kind: "not_connected" },
+          ),
+        );
+        summary[outcome] += 1;
+        continue;
       }
-      const outcome = await publishJob(admin, job, jobToken);
+
+      // No silent fallback: a job whose account lacks a token fails on its own
+      // instead of publishing as a different profile.
+      const identity = await getPublishingIdentity(admin, targetUrn);
+      const outcome = await publishJob(admin, job, identity.accessToken);
       summary[outcome] += 1;
     } catch (error) {
-      // A crash here leaves the job in "publishing"; the next run's stale
-      // recovery moves it to manual_required instead of blindly retrying.
       console.error("Unhandled publishing error", job.id, error);
-      summary.failed += 1;
+      try {
+        const outcome = await recordFailure(admin, job, error);
+        summary[outcome] += 1;
+      } catch (recordError) {
+        // A crash here leaves the job in "publishing"; the next run's stale
+        // recovery moves it to manual_required instead of blindly retrying.
+        console.error("Could not record publishing failure", job.id, recordError);
+        summary.failed += 1;
+      }
     }
   }
 

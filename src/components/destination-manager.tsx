@@ -167,7 +167,17 @@ export function DestinationManager({
         body: JSON.stringify({ isEnabled: enabled }),
       });
       if (!response.ok) throw new Error(await readError(response, "Could not update the destination."));
-      toast.success(enabled ? "Destination enabled." : "Destination disabled.");
+      const payload = (await response.json().catch(() => null)) as
+        | { cancelledJobs?: number }
+        | null;
+      const cancelled = payload?.cancelledJobs ?? 0;
+      if (!enabled && cancelled > 0) {
+        toast.message("Destination disabled.", {
+          description: `${cancelled} queued job${cancelled === 1 ? "" : "s"} for this destination were cancelled.`,
+        });
+      } else {
+        toast.success(enabled ? "Destination enabled." : "Destination disabled.");
+      }
       router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not update the destination.");

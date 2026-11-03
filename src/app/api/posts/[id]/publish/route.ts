@@ -52,7 +52,7 @@ export async function POST(
   }
 
   const targets = body.destinationId
-    ? jobs.filter((job) => job.id === body.destinationId)
+    ? jobs.filter((job) => job.destination_id === body.destinationId)
     : jobs.filter((job) => job.status !== "published" && job.status !== "publishing");
 
   if (body.destinationId && targets.length === 0) {
@@ -118,7 +118,15 @@ export async function POST(
     .eq("id", 1)
     .maybeSingle();
 
-  if (!settings?.linkedin_connected || !settings.linkedin_member_id) {
+  const { data: accounts } = await auth.supabase
+    .from("linkedin_accounts")
+    .select("member_urn")
+    .neq("status", "disconnected")
+    .limit(1);
+
+  const anyAccountConnected = (accounts?.length ?? 0) > 0;
+
+  if (!anyAccountConnected && (!settings?.linkedin_connected || !settings.linkedin_member_id)) {
     return apiError(
       "LinkedIn is not connected. Connect your account in Settings, or use the manual publishing option.",
       409,
@@ -140,7 +148,8 @@ export async function POST(
       locked_at: null,
       lock_token: null,
     })
-    .in("id", targetIds);
+    .in("id", targetIds)
+    .not("status", "in", "(publishing,published)");
 
   if (jobError) {
     return apiError(`Could not queue the destination jobs: ${jobError.message}`, 500);

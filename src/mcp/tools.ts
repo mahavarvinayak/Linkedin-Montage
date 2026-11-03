@@ -344,14 +344,31 @@ async function getSelectableDestinations(specifiedIds?: string[]) {
     .select("id, author_urn, name, destination_type, status, is_enabled, publish_authorized");
 
   if (specifiedIds && specifiedIds.length > 0) {
-    query = query.in("id", specifiedIds);
+    query = query
+      .in("id", specifiedIds)
+      .eq("is_enabled", true)
+      .eq("publish_authorized", true)
+      .in("status", ["available", "unverified"]);
   } else {
     query = query.eq("is_enabled", true).eq("publish_authorized", true).in("status", ["available", "unverified"]);
   }
 
   const { data, error } = await query;
   if (error) throw new Error(`Could not fetch destinations: ${error.message}`);
-  return data ?? [];
+
+  const rows = data ?? [];
+
+  if (specifiedIds && specifiedIds.length > 0) {
+    const found = new Set(rows.map((row) => row.id as string));
+    const missing = specifiedIds.filter((id) => !found.has(id));
+    if (missing.length > 0) {
+      throw new Error(
+        `These destinations are not ready to publish (disabled, unauthorized or missing): ${missing.join(", ")}. Run cadence_list_destinations to see ready IDs.`,
+      );
+    }
+  }
+
+  return rows;
 }
 
 async function syncJobsForPost(postId: string, destinationIds: string[], scheduledAt: string | null, isDraft = false) {
@@ -368,7 +385,24 @@ async function syncJobsForPost(postId: string, destinationIds: string[], schedul
     .not("status", "in", '("published","publishing")')
     .not("destination_id", "in", `(${destinations.map((d) => `"${d.id}"`).join(",")})`);
 
+  // Never overwrite a job that already published: a reschedule must not
+  // duplicate a LinkedIn post.
+  const { data: existingJobs, error: existingError } = await adminClient
+    .from("publishing_jobs")
+    .select("destination_id, status")
+    .eq("post_id", postId);
+
+  if (existingError) throw new Error(existingError.message);
+
+  const lockedDestinations = new Set(
+    (existingJobs ?? [])
+      .filter((job) => job.status === "published" || job.status === "publishing")
+      .map((job) => job.destination_id as string),
+  );
+
   for (const dest of destinations) {
+    if (lockedDestinations.has(dest.id)) continue;
+
     const status = isDraft ? "pending" : "scheduled";
     const { error } = await adminClient.from("publishing_jobs").upsert(
       {
@@ -378,10 +412,15 @@ async function syncJobsForPost(postId: string, destinationIds: string[], schedul
         status,
         scheduled_at: isDraft ? null : scheduledAt,
         next_attempt_at: isDraft ? null : scheduledAt,
+        attempts: 0,
+        last_attempt_at: null,
+        last_error: null,
+        locked_at: null,
+        lock_token: null,
       },
       { onConflict: "post_id, destination_id" },
     );
-    if (error) console.error("Error creating publishing job", error.message);
+    if (error) throw new Error(`Could not create publishing job for ${dest.name}: ${error.message}`);
   }
 
   await adminClient.rpc("admin_refresh_post_status", { p_post_id: postId });
@@ -543,9 +582,28 @@ export async function executeTool(name: string, args: Record<string, any>): Prom
       let postId = args.post_id;
 
       if (postId) {
+        const { data: current, error: currentError } = await adminClient
+          .from("posts")
+          .select("status")
+          .eq("id", postId)
+          .maybeSingle();
+
+        if (currentError) throw new Error(currentError.message);
+        if (!current) throw new Error(`Post not found with ID ${postId}.`);
+        if (current.status === "publishing" || current.status === "published") {
+          throw new Error(
+            `Post ${postId} is ${current.status} and cannot be scheduled again. Use cadence_retry_job for a failed destination.`,
+          );
+        }
+
         const updateData: Record<string, any> = {
           scheduled_at: scheduledIso,
           status: "scheduled",
+          attempts: 0,
+          next_attempt_at: null,
+          last_error: null,
+          locked_at: null,
+          lock_token: null,
         };
         if (args.caption !== undefined) updateData.caption = args.caption.trim();
         if (args.hashtags !== undefined) updateData.hashtags = args.hashtags.trim();
@@ -815,9 +873,28 @@ export async function executeTool(name: string, args: Record<string, any>): Prom
 
       let scheduledIso = null;
       if (args.scheduled_at) {
+        const { data: current, error: currentError } = await adminClient
+          .from("posts")
+          .select("status")
+          .eq("id", args.post_id)
+          .maybeSingle();
+
+        if (currentError) throw new Error(currentError.message);
+        if (!current) throw new Error(`Post not found with ID ${args.post_id}.`);
+        if (current.status === "publishing" || current.status === "published") {
+          throw new Error(
+            `Post ${args.post_id} is ${current.status} and cannot be edited or rescheduled.`,
+          );
+        }
+
         scheduledIso = parseDateTimeToIso(args.scheduled_at);
         updateData.scheduled_at = scheduledIso;
         updateData.status = "scheduled";
+        updateData.attempts = 0;
+        updateData.next_attempt_at = null;
+        updateData.last_error = null;
+        updateData.locked_at = null;
+        updateData.lock_token = null;
       }
 
       const { error } = await adminClient.from("posts").update(updateData).eq("id", args.post_id);
@@ -831,9 +908,31 @@ export async function executeTool(name: string, args: Record<string, any>): Prom
     }
 
     case "cadence_delete_post": {
+      const { data: current, error: currentError } = await adminClient
+        .from("posts")
+        .select("status, media_paths")
+        .eq("id", args.post_id)
+        .maybeSingle();
+
+      if (currentError) throw new Error(currentError.message);
+      if (!current) throw new Error(`Post not found with ID ${args.post_id}.`);
+      if (current.status !== "draft" && current.status !== "cancelled") {
+        throw new Error(
+          `Only drafts and cancelled posts can be deleted. Post ${args.post_id} is ${current.status}.`,
+        );
+      }
+
       const { error } = await adminClient.from("posts").delete().eq("id", args.post_id);
       if (error) throw new Error(error.message);
-      return { ok: true, post_id: args.post_id, message: "Post and publishing jobs deleted." };
+
+      const mediaPaths = Array.isArray(current.media_paths)
+        ? current.media_paths.filter((value): value is string => typeof value === "string")
+        : [];
+      if (mediaPaths.length > 0) {
+        await adminClient.storage.from("media").remove(mediaPaths);
+      }
+
+      return { ok: true, post_id: args.post_id, message: "Post, publishing jobs and media deleted." };
     }
 
     case "cadence_retry_job": {
@@ -845,16 +944,25 @@ export async function executeTool(name: string, args: Record<string, any>): Prom
 
       if (error || !job) throw new Error(`Job not found: ${args.job_id}`);
 
+      if (job.status !== "failed" && job.status !== "manual_required") {
+        throw new Error(
+          `Only failed jobs or jobs that need attention can be retried. This job is ${job.status}.`,
+        );
+      }
+
       const { error: updateError } = await adminClient
         .from("publishing_jobs")
         .update({
           status: "scheduled",
+          scheduled_at: new Date().toISOString(),
           next_attempt_at: new Date().toISOString(),
+          attempts: 0,
           last_error: null,
           locked_at: null,
           lock_token: null,
         })
-        .eq("id", args.job_id);
+        .eq("id", args.job_id)
+        .in("status", ["failed", "manual_required"]);
 
       if (updateError) throw new Error(updateError.message);
 
@@ -863,25 +971,42 @@ export async function executeTool(name: string, args: Record<string, any>): Prom
     }
 
     case "cadence_trigger_publish": {
-      // Claim and publish due jobs
-      const claim = await adminClient.rpc("admin_claim_due_jobs", {
-        p_limit: 5,
-        p_post_id: args.post_id || null,
-        p_job_id: args.job_id || null,
+      // Delegate to the Edge Function worker. Claiming jobs here without
+      // publishing them would leave them stuck in "publishing".
+      const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+      if (!url || !key) {
+        throw new Error("NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.");
+      }
+
+      const response = await fetch(`${url.replace(/\/+$/, "")}/functions/v1/publish-scheduled`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...(args.post_id ? { postId: args.post_id } : {}),
+          ...(args.job_id ? { jobId: args.job_id } : {}),
+        }),
       });
 
-      if (claim.error) throw new Error(`Claim failed: ${claim.error.message}`);
-      const claimedJobs = claim.data ?? [];
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: string; [key: string]: unknown }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error || `Publishing worker returned HTTP ${response.status}.`);
+      }
 
       return {
         ok: true,
-        claimed_count: claimedJobs.length,
-        jobs: claimedJobs.map((j: any) => ({
-          id: j.id,
-          destination: j.destination_name,
-          scheduled_at: j.scheduled_at,
-        })),
-        message: claimedJobs.length > 0 ? "Claimed jobs for publishing." : "No jobs were due for publishing.",
+        ...(payload ?? {}),
+        message:
+          typeof payload?.claimed === "number" && payload.claimed > 0
+            ? `Worker processed ${payload.claimed} destination job(s).`
+            : "No destination jobs were due for publishing.",
       };
     }
 

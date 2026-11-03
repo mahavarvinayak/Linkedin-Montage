@@ -195,33 +195,62 @@ export async function getPublishingIdentity(
   accountUrn?: string | null,
 ): Promise<PublishingIdentity> {
   const settings = await getSettings(admin);
+  const target = accountUrn?.trim() || null;
+  const primaryUrn = settings.linkedin_member_id
+    ? `urn:li:person:${settings.linkedin_member_id.replace(/^urn:li:person:/, "")}`
+    : null;
 
-  let tokens = await rpcJson<Tokens | null>(admin, "admin_get_account_tokens", {
-    p_member_urn: accountUrn || null,
-  }).catch(() => null);
+  let tokens: Tokens | null = null;
 
-  if (!tokens?.access_token) {
-    tokens = await rpcJson<Tokens | null>(admin, "admin_get_linkedin_tokens").catch(() => null);
-  }
+  if (target) {
+    // A destination always publishes with its own account's token. Falling back
+    // to another profile's token would post as the wrong author, so a missing
+    // token fails only this job.
+    tokens = await rpcJson<Tokens | null>(admin, "admin_get_account_tokens", {
+      p_member_urn: target,
+    }).catch(() => null);
 
-  if (!tokens?.access_token) {
-    throw new LinkedInError("No LinkedIn access token is stored. Reconnect your account.", {
-      kind: "not_connected",
-    });
+    if (!tokens?.access_token) {
+      throw new LinkedInError(
+        "No LinkedIn access token is stored for this destination's account. Reconnect that account in Settings.",
+        { kind: "not_connected" },
+      );
+    }
+  } else {
+    if (primaryUrn) {
+      tokens = await rpcJson<Tokens | null>(admin, "admin_get_account_tokens", {
+        p_member_urn: primaryUrn,
+      }).catch(() => null);
+    }
+
+    if (!tokens?.access_token) {
+      tokens = await rpcJson<Tokens | null>(admin, "admin_get_linkedin_tokens").catch(() => null);
+    }
+
+    if (!tokens?.access_token) {
+      throw new LinkedInError("No LinkedIn access token is stored. Reconnect your account.", {
+        kind: "not_connected",
+      });
+    }
   }
 
   let accessToken = tokens.access_token;
   const expiresAt = tokens.expires_at ? Date.parse(tokens.expires_at) : null;
 
   if (expiresAt && expiresAt < Date.now() + 120_000) {
-    accessToken = await refreshAccessToken(admin, tokens);
+    accessToken = await refreshAccessToken(admin, tokens, target, primaryUrn);
   }
 
-  const memberId = (accountUrn || settings.linkedin_member_id || "").replace(/^urn:li:person:/, "");
+  const memberUrn = target ?? primaryUrn;
+  if (!memberUrn) {
+    throw new LinkedInError("LinkedIn is not connected. Reconnect your account.", {
+      kind: "not_connected",
+    });
+  }
 
   return {
     accessToken,
-    memberUrn: `urn:li:person:${memberId}`,
+    memberUrn,
     settings,
   };
 }
@@ -229,6 +258,8 @@ export async function getPublishingIdentity(
 async function refreshAccessToken(
   admin: AdminClient,
   tokens: Tokens,
+  accountUrn?: string | null,
+  primaryUrn?: string | null,
 ): Promise<string> {
   const clientId = Deno.env.get("LINKEDIN_CLIENT_ID");
   const clientSecret = Deno.env.get("LINKEDIN_CLIENT_SECRET");
@@ -237,6 +268,8 @@ async function refreshAccessToken(
     await markConnectionError(
       admin,
       "Access token expired and no refresh token is available. Reconnect LinkedIn.",
+      accountUrn,
+      primaryUrn,
     );
     throw new LinkedInError(
       "LinkedIn access token expired. Reconnect your account from Settings.",
@@ -275,6 +308,8 @@ async function refreshAccessToken(
     await markConnectionError(
       admin,
       `LinkedIn token refresh failed: ${detail.message}. Reconnect your account.`,
+      accountUrn,
+      primaryUrn,
     );
     throw new LinkedInError(
       "LinkedIn token refresh failed. Reconnect your account from Settings.",
@@ -292,34 +327,73 @@ async function refreshAccessToken(
   const expiresAt = refreshed.expires_in
     ? new Date(Date.now() + refreshed.expires_in * 1000).toISOString()
     : null;
+  const scopes = (refreshed.scope ?? tokens.scope ?? "").split(/[\s,]+/).filter(Boolean);
 
-  await rpcJson(admin, "admin_store_linkedin_tokens", {
-    p_access_token: refreshed.access_token,
-    p_refresh_token: refreshed.refresh_token ?? tokens.refresh_token,
-    p_expires_at: expiresAt,
-    p_scope: refreshed.scope ?? tokens.scope ?? null,
-  });
+  if (accountUrn) {
+    await rpcJson(admin, "admin_store_account_tokens", {
+      p_member_urn: accountUrn,
+      p_access_token: refreshed.access_token,
+      p_refresh_token: refreshed.refresh_token ?? tokens.refresh_token,
+      p_expires_at: expiresAt,
+      p_scope: refreshed.scope ?? tokens.scope ?? null,
+    });
 
-  await admin
-    .from("settings")
-    .update({
-      linkedin_connected: true,
-      linkedin_token_expires_at: expiresAt,
-      linkedin_last_error: null,
-      linkedin_scopes: (refreshed.scope ?? tokens.scope ?? "")
-        .split(/[\s,]+/)
-        .filter(Boolean),
-    })
-    .eq("id", 1);
+    await admin
+      .from("linkedin_accounts")
+      .update({
+        token_expires_at: expiresAt,
+        scopes,
+        status: "connected",
+        last_error: null,
+      })
+      .eq("member_urn", accountUrn);
+  } else {
+    await rpcJson(admin, "admin_store_linkedin_tokens", {
+      p_access_token: refreshed.access_token,
+      p_refresh_token: refreshed.refresh_token ?? tokens.refresh_token,
+      p_expires_at: expiresAt,
+      p_scope: refreshed.scope ?? tokens.scope ?? null,
+    });
+  }
+
+  // Only the primary account owns the settings row; refreshing a secondary
+  // profile must not overwrite the primary's displayed session state.
+  const isPrimary = !accountUrn || (primaryUrn !== null && primaryUrn === accountUrn);
+  if (isPrimary) {
+    await admin
+      .from("settings")
+      .update({
+        linkedin_connected: true,
+        linkedin_token_expires_at: expiresAt,
+        linkedin_last_error: null,
+        linkedin_scopes: scopes,
+      })
+      .eq("id", 1);
+  }
 
   return refreshed.access_token;
 }
 
-export async function markConnectionError(admin: AdminClient, message: string): Promise<void> {
-  await admin
-    .from("settings")
-    .update({ linkedin_last_error: message })
-    .eq("id", 1);
+export async function markConnectionError(
+  admin: AdminClient,
+  message: string,
+  accountUrn?: string | null,
+  primaryUrn?: string | null,
+): Promise<void> {
+  if (accountUrn) {
+    await admin
+      .from("linkedin_accounts")
+      .update({ status: "expired", last_error: message })
+      .eq("member_urn", accountUrn);
+  }
+
+  const isPrimary = !accountUrn || (primaryUrn !== null && primaryUrn === accountUrn);
+  if (isPrimary) {
+    await admin
+      .from("settings")
+      .update({ linkedin_last_error: message })
+      .eq("id", 1);
+  }
 }
 
 function mediaContentType(path: string): string {

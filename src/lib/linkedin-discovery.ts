@@ -312,6 +312,7 @@ export async function syncDestinations(
         .from("linkedin_destinations")
         .select("id, author_urn")
         .eq("source", "linkedin_sync")
+        .eq("account_urn", access.memberUrn)
         .neq("destination_type", "personal_profile")
         .not("status", "eq", "unavailable");
 
@@ -333,6 +334,21 @@ export async function syncDestinations(
         }
       }
     }
+  }
+
+  // Preserve the admin-controlled enabled flag. A sync must refresh what LinkedIn
+  // reports, not silently re-enable destinations that were switched off in Cadence.
+  // author_urn is globally unique, so the lookup is safe without an account filter.
+  const { data: existingFlags } = await admin
+    .from("linkedin_destinations")
+    .select("author_urn, is_enabled");
+
+  const enabledByAuthor = new Map(
+    (existingFlags ?? []).map((row) => [row.author_urn as string, row.is_enabled as boolean]),
+  );
+
+  for (const row of rows) {
+    row.is_enabled = enabledByAuthor.get(row.author_urn as string) ?? true;
   }
 
   const { error: upsertError } = await admin
@@ -357,6 +373,7 @@ export async function syncDestinations(
         status: "permission_missing",
         status_detail: `The token is missing ${ORG_PUBLISH_SCOPE}. Organization publishing requires approved Community Management API access; reconnect after the product is added to the LinkedIn app.`,
       })
+      .eq("account_urn", access.memberUrn)
       .neq("destination_type", "personal_profile")
       .neq("status", "unavailable");
 
@@ -425,10 +442,18 @@ export async function registerManualDestination(
   const scopes = new Set(access.scopes);
 
   if (authorUrn.startsWith("urn:li:person:")) {
+    if (authorUrn !== access.memberUrn) {
+      throw new DestinationSyncError(
+        "Only the currently connected member's profile can be added manually. Connect that profile first if you want to publish as it.",
+        422,
+      );
+    }
+
     const authorized = scopes.has(MEMBER_PUBLISH_SCOPE);
     return {
       destination: await upsertManualRow(admin, {
         author_urn: authorUrn,
+        account_urn: access.memberUrn,
         name: options.name?.trim() || "Personal profile",
         destination_type: "personal_profile",
         publish_scope: MEMBER_PUBLISH_SCOPE,
@@ -460,6 +485,7 @@ export async function registerManualDestination(
   const authorized = scopes.has(ORG_PUBLISH_SCOPE);
   const destination = await upsertManualRow(admin, {
     author_urn: authorUrn,
+    account_urn: access.memberUrn,
     organization_urn: authorUrn,
     organization_id: organizationId,
     name: options.name?.trim() || organizationName(details, organizationId),

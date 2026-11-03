@@ -48,6 +48,13 @@ This applies, in order:
   functions, the private `media` bucket and storage policies.
 - `supabase/migrations/0002_cron.sql` — pg_cron jobs (only if the Vault secrets
   below already exist; otherwise it raises a notice and skips them).
+- `supabase/migrations/0003_destinations.sql` — `linkedin_destinations`,
+  `publishing_jobs`, per-destination claim/recover RPCs, post-status derivation
+  and the backfill from the single-profile schema.
+- `supabase/migrations/0004_multi_accounts.sql` — `linkedin_accounts`,
+  `account_urn` on destinations and per-account Vault token RPCs.
+- `supabase/migrations/0005_account_isolation.sql` — strict per-account token
+  reads/writes (no cross-profile fallback) and a destination lookup index.
 
 ### Option B — SQL editor
 
@@ -55,6 +62,9 @@ Open **SQL Editor** and run the files in order:
 
 1. `0001_init.sql`
 2. `0002_cron.sql`
+3. `0003_destinations.sql`
+4. `0004_multi_accounts.sql`
+5. `0005_account_isolation.sql`
 
 Do not run `0002_cron.sql` until step 3 is complete, or it will skip job
 creation. Re-run it after adding the Vault secrets.
@@ -65,7 +75,8 @@ creation. Re-run it after adding the Vault secrets.
 select table_name from information_schema.tables
 where table_schema = 'public'
 order by table_name;
--- app_admins, posts, publishing_logs, settings
+-- app_admins, linkedin_accounts, linkedin_destinations, posts,
+-- publishing_jobs, publishing_logs, settings
 
 select id, public, file_size_limit, allowed_mime_types
 from storage.buckets where id = 'media';
@@ -74,6 +85,20 @@ select proname from pg_proc
 where pronamespace = 'public'::regnamespace
   and proname like 'admin_%';
 ```
+
+### Upgrading an existing single-profile deployment
+
+1. Back up the database (Dashboard → Database → Backups).
+2. Run migrations `0003`, `0004` and `0005` in order. `0003` backfills one
+   destination and one job per existing post; `0004` backfills
+   `linkedin_accounts` and `account_urn`.
+3. Redeploy `publish-scheduled` and `cleanup-media` **after** the migrations, so
+   the worker stops calling the removed post-level claim functions.
+4. Keep `LINKEDIN_SCOPES` unchanged at first. Add `r_organization_admin
+   w_organization_social` only after LinkedIn approves organization products for
+   the app, then reconnect each profile and run **Destinations → Refresh**.
+5. Verify with the queries above and open **Settings → Publishing destinations**
+   to confirm the counts.
 
 ## 3. Create the admin account
 
@@ -223,9 +248,17 @@ Authorization header returns `401` even if the request reached the function.
 5. Add the production callback URL to the LinkedIn app's **Authorized redirect
    URLs**.
 6. Open the site, sign in, and complete **Settings → LinkedIn**.
+7. Open **Destinations → Refresh destinations**, then schedule a test post to one
+   personal profile before adding organization pages.
 
 `SUPABASE_SERVICE_ROLE_KEY`, LinkedIn secrets and the Telegram bot token must
 never be prefixed with `NEXT_PUBLIC_`.
+
+When LinkedIn approves the Community Management API for the app, extend
+`LINKEDIN_SCOPES` with `r_organization_admin w_organization_social`, redeploy,
+and reconnect each profile so the new token carries the organization scopes.
+Organization pages discovered without `w_organization_social` stay visible but
+are marked **Missing permission** and cannot be selected.
 
 ### Other Node hosts
 

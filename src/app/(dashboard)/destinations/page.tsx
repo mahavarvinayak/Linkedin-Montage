@@ -6,7 +6,7 @@ import { Card } from "@/components/ui/card";
 import { DestinationManager } from "@/components/destination-manager";
 import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
-import { getIntegrationStatus, listDestinations } from "@/lib/queries";
+import { getIntegrationStatus, listDestinations, listLinkedInAccounts } from "@/lib/queries";
 import { isDestinationSelectable } from "@/lib/destinations";
 import type { DestinationRow } from "@/lib/types";
 
@@ -15,6 +15,7 @@ export const metadata: Metadata = { title: "Destinations" };
 
 export default async function DestinationsPage() {
   const status = await getIntegrationStatus();
+  const accounts = await listLinkedInAccounts();
 
   let destinations: DestinationRow[] = [];
   let loadError: string | null = null;
@@ -124,7 +125,7 @@ export default async function DestinationsPage() {
 
       <DestinationManager
         destinations={destinations}
-        connected={Boolean(status.settings?.linkedin_connected)}
+        connected={Boolean(status.settings?.linkedin_connected) || accounts.length > 0}
         configured={status.environment.linkedin.configured}
         syncedAt={status.destinations.syncedAt}
         lastError={null}

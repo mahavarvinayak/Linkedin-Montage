@@ -306,8 +306,9 @@ export function LinkedInConnectionPanel({
             <ShieldCheck className="mx-auto size-5 text-stone-400" />
             <p className="mt-2 text-[12.5px] font-medium">No LinkedIn account connected</p>
             <p className="mx-auto mt-1 max-w-md text-[11.5px] leading-relaxed text-muted-foreground">
-              Connect the profile that should publish. Cadence only requests openid, profile and
-              w_member_social, stores tokens in Supabase Vault and never exposes them to the browser.
+              Connect the profile that should publish. Cadence requests openid, profile and
+              w_member_social, plus organization scopes when they are approved for your app. Tokens
+              stay in Supabase Vault and are never exposed to the browser.
             </p>
           </div>
         )}

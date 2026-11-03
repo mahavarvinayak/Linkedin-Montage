@@ -32,6 +32,18 @@ function splitScopes(value: string | null | undefined): string[] {
   return (value ?? "").split(/[\s,]+/).filter(Boolean);
 }
 
+async function primaryMemberUrn(admin: SupabaseClient): Promise<string | null> {
+  const { data } = await admin
+    .from("settings")
+    .select("linkedin_member_id")
+    .eq("id", 1)
+    .maybeSingle();
+
+  const id = data?.linkedin_member_id;
+  if (!id) return null;
+  return id.startsWith("urn:li:person:") ? id : `urn:li:person:${id}`;
+}
+
 async function refreshTokens(
   admin: SupabaseClient,
   tokens: TokenRecord,
@@ -80,7 +92,19 @@ async function refreshTokens(
       payload.error_description ||
       payload.error ||
       `LinkedIn token refresh failed with HTTP ${response.status}.`;
-    await admin.from("settings").update({ linkedin_last_error: detail }).eq("id", 1);
+
+    if (memberUrn) {
+      await admin
+        .from("linkedin_accounts")
+        .update({ status: "expired", last_error: detail })
+        .eq("member_urn", memberUrn);
+    }
+
+    const primary = memberUrn ? (await primaryMemberUrn(admin)) === memberUrn : true;
+    if (primary) {
+      await admin.from("settings").update({ linkedin_last_error: detail }).eq("id", 1);
+    }
+
     throw new LinkedInTokenError(detail, "expired");
   }
 
@@ -123,15 +147,18 @@ async function refreshTokens(
     }
   }
 
-  await admin
-    .from("settings")
-    .update({
-      linkedin_connected: true,
-      linkedin_token_expires_at: expiresAt,
-      linkedin_last_error: null,
-      linkedin_scopes: scopes,
-    })
-    .eq("id", 1);
+  const isPrimary = memberUrn ? (await primaryMemberUrn(admin)) === memberUrn : true;
+  if (isPrimary) {
+    await admin
+      .from("settings")
+      .update({
+        linkedin_connected: true,
+        linkedin_token_expires_at: expiresAt,
+        linkedin_last_error: null,
+        linkedin_scopes: scopes,
+      })
+      .eq("id", 1);
+  }
 
   return { accessToken: payload.access_token, scopes };
 }
@@ -145,40 +172,67 @@ export async function loadLinkedInAccess(
   admin: SupabaseClient,
   targetMemberUrn?: string | null,
 ): Promise<LinkedInAccess> {
-  // If target member URN is requested, search in linkedin_accounts first
+  // A specific account was requested. Its own token must be used: never fall
+  // back to another profile's token, which would publish as the wrong author.
   if (targetMemberUrn) {
-    const { data: account } = await admin
+    const { data: account, error: accountError } = await admin
       .from("linkedin_accounts")
       .select("member_urn, name, scopes, status")
       .eq("member_urn", targetMemberUrn)
       .maybeSingle();
+
+    if (accountError) {
+      throw new LinkedInTokenError(
+        `Could not read the LinkedIn account: ${accountError.message}`,
+        "provider",
+      );
+    }
+
+    if (!account) {
+      throw new LinkedInTokenError(
+        "This LinkedIn account is no longer connected. Reconnect it in Settings.",
+        "not_connected",
+      );
+    }
 
     const { data: tokens, error: tokenError } = await admin.rpc(
       "admin_get_account_tokens",
       { p_member_urn: targetMemberUrn },
     );
 
-    if (!tokenError && tokens?.access_token) {
-      const record = tokens as TokenRecord;
-      const expiresAt = record.expires_at ? Date.parse(record.expires_at) : null;
-      let accessToken: string = record.access_token!;
-      let scopes = splitScopes(record.scope ?? account?.scopes?.join(" ") ?? null);
-
-      if (expiresAt && expiresAt < Date.now() + 120_000) {
-        const refreshed = await refreshTokens(admin, record, targetMemberUrn);
-        accessToken = refreshed.accessToken;
-        scopes = refreshed.scopes.length > 0 ? refreshed.scopes : scopes;
-      }
-
-      const memberId = targetMemberUrn.replace(/^urn:li:person:/, "");
-      return {
-        accessToken,
-        scopes,
-        memberId,
-        memberUrn: targetMemberUrn,
-        memberName: account?.name ?? null,
-      };
+    if (tokenError) {
+      throw new LinkedInTokenError(
+        `Could not read the stored LinkedIn token for this account: ${tokenError.message}`,
+        "provider",
+      );
     }
+
+    const record = (tokens ?? null) as TokenRecord | null;
+    if (!record?.access_token) {
+      throw new LinkedInTokenError(
+        "No LinkedIn access token is stored for this account. Reconnect it in Settings.",
+        "not_connected",
+      );
+    }
+
+    const expiresAt = record.expires_at ? Date.parse(record.expires_at) : null;
+    let accessToken: string = record.access_token;
+    let scopes = splitScopes(record.scope ?? account.scopes?.join(" ") ?? null);
+
+    if (expiresAt && expiresAt < Date.now() + 120_000) {
+      const refreshed = await refreshTokens(admin, record, targetMemberUrn);
+      accessToken = refreshed.accessToken;
+      scopes = refreshed.scopes.length > 0 ? refreshed.scopes : scopes;
+    }
+
+    const memberId = targetMemberUrn.replace(/^urn:li:person:/, "");
+    return {
+      accessToken,
+      scopes,
+      memberId,
+      memberUrn: targetMemberUrn,
+      memberName: account.name ?? null,
+    };
   }
 
   const { data: settings, error } = await admin

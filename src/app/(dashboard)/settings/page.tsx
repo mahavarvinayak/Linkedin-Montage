@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import {
   CheckCircle2,
   CircleAlert,
@@ -8,11 +9,13 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
+import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { CopyButton } from "@/components/copy-button";
 import { PageHeader } from "@/components/page-header";
 import { LinkedInConnectionPanel, TelegramPanel } from "@/components/settings-panels";
 import { getIntegrationStatus, listLinkedInAccounts } from "@/lib/queries";
+import { formatIST } from "@/lib/ist";
 import { MEDIA_BUCKET } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
@@ -45,7 +48,7 @@ function StatusRow({
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ linkedin?: string; message?: string }>;
+  searchParams: Promise<{ linkedin?: string; message?: string; note?: string }>;
 }) {
   const [status, accounts, params] = await Promise.all([
     getIntegrationStatus(),
@@ -73,6 +76,19 @@ export default async function SettingsPage({
         </Alert>
       ) : null}
 
+      {params.note ? (
+        <Alert
+          tone="warning"
+          title={
+            params.linkedin === "connected"
+              ? "LinkedIn connected with a warning"
+              : "LinkedIn connection notice"
+          }
+        >
+          {params.note}
+        </Alert>
+      ) : null}
+
       <section className="space-y-3">
         <h2 className="text-[15px] font-semibold tracking-[-0.015em]">LinkedIn Profiles & Accounts</h2>
         <LinkedInConnectionPanel
@@ -82,6 +98,44 @@ export default async function SettingsPage({
           tokenExpired={status.tokenExpired}
           tokenExpiringSoon={status.tokenExpiringSoon}
         />
+
+        <Card className="p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-[12.5px] font-medium">Publishing destinations</p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                Personal profiles, Company Pages and Showcase Pages discovered from your connected
+                accounts.
+              </p>
+            </div>
+            <Link href="/destinations" className={buttonVariants({ variant: "secondary", size: "sm" })}>
+              Manage destinations
+            </Link>
+          </div>
+
+          <div className="mt-4 grid gap-2 sm:grid-cols-4">
+            {[
+              { label: "Total", value: status.destinations.total },
+              { label: "Ready", value: status.destinations.selectable },
+              { label: "Missing permission", value: status.destinations.missingPermission },
+              { label: "Unavailable", value: status.destinations.unavailable },
+            ].map((item) => (
+              <div key={item.label} className="rounded-lg border border-border bg-stone-50/60 px-3 py-2">
+                <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                  {item.label}
+                </p>
+                <p className="mt-0.5 text-[15px] font-semibold tabular-nums">{item.value}</p>
+              </div>
+            ))}
+          </div>
+
+          <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+            {status.destinations.syncedAt
+              ? `Last synced ${formatIST(status.destinations.syncedAt)}.`
+              : "Destinations have not been synced yet. Open Manage destinations and refresh after connecting LinkedIn."}
+            {status.destinations.lastError ? ` Last warning: ${status.destinations.lastError}` : ""}
+          </p>
+        </Card>
 
         <Card className="p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">

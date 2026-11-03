@@ -164,6 +164,9 @@ export function DestinationSelector({
               const selectableDestination = isDestinationSelectable(destination);
               const blockedReason = destinationBlockedReason(destination);
               const checked = selectedSet.has(destination.id);
+              // A selected destination stays removable even if it stopped being
+              // selectable after a sync, otherwise the composer traps it.
+              const canToggle = selectableDestination || checked;
               const meta = DESTINATION_STATUS_META[destination.status];
 
               return (
@@ -173,7 +176,8 @@ export function DestinationSelector({
                       "flex cursor-pointer items-start gap-2.5 px-3 py-2.5 transition-colors",
                       selectableDestination
                         ? "hover:bg-stone-50/70"
-                        : "cursor-not-allowed bg-stone-50/40",
+                        : "bg-stone-50/40",
+                      !canToggle && "cursor-not-allowed",
                       disabled && "cursor-not-allowed",
                     )}
                   >
@@ -192,7 +196,7 @@ export function DestinationSelector({
                       type="checkbox"
                       className="sr-only"
                       checked={checked}
-                      disabled={disabled || !selectableDestination}
+                      disabled={disabled || !canToggle}
                       onChange={() => toggle(destination.id)}
                     />
                     <span className="min-w-0 flex-1">

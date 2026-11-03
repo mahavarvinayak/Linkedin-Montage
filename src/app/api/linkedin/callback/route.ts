@@ -213,6 +213,20 @@ export async function GET(request: Request) {
       });
     }
 
+    // Settings now name this profile as primary, so re-store the token to mirror
+    // it into the legacy shared secret (0005 only mirrors for the primary).
+    const mirrored = await admin.rpc("admin_store_account_tokens", {
+      p_member_urn: memberUrn,
+      p_access_token: tokens.access_token,
+      p_refresh_token: tokens.refresh_token ?? null,
+      p_expires_at: expiresAt,
+      p_scope: grantedScope || null,
+    });
+
+    if (mirrored.error) {
+      await logEvent(admin, null, "linkedin_connect_warning", mirrored.error.message);
+    }
+
     await logEvent(admin, null, "linkedin_connected", "LinkedIn account connected.", {
       member_id: profile.sub,
       scopes: scopeList,

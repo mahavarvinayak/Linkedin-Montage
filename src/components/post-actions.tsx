@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   CalendarClock,
-  CheckCircle2,
   Loader2,
   PenLine,
   RefreshCw,
@@ -29,7 +28,7 @@ import { Label } from "@/components/ui/label";
 import { istInputsToUtcIso, nowISTInputs, toISTInput, formatIST } from "@/lib/ist";
 import type { PostView } from "@/lib/types";
 
-type DialogKind = "reschedule" | "publish" | "cancel" | "delete" | "retry" | "manual" | null;
+type DialogKind = "reschedule" | "publish" | "cancel" | "delete" | null;
 
 async function readError(response: Response, fallback: string): Promise<string> {
   const payload = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -52,15 +51,9 @@ export function PostActions({
   const fallback = nowISTInputs(60);
   const [date, setDate] = useState(initial.date || fallback.date);
   const [time, setTime] = useState(initial.time || fallback.time);
-  const [permalink, setPermalink] = useState("");
-  const [verified, setVerified] = useState(false);
-
-  const isManualRequired = post.status === "manual_required";
 
   function open(kind: DialogKind) {
     setError(null);
-    setVerified(false);
-    setPermalink(post.permalink ?? "");
     setDialog(kind);
   }
 
@@ -124,57 +117,6 @@ export function PostActions({
       router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not start publishing.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function onRetry() {
-    if (isManualRequired && !verified) {
-      setError("Confirm that you checked LinkedIn before retrying.");
-      return;
-    }
-
-    setBusy(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/posts/${post.id}/publish`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmUncertain: verified }),
-      });
-      if (!response.ok) throw new Error(await readError(response, "Could not retry the post."));
-      const payload = (await response.json()) as { warning?: string | null };
-      toast.message("Retry queued", {
-        description: payload.warning ?? "The worker will attempt this post again.",
-      });
-      setDialog(null);
-      router.refresh();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not retry the post.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function onManualPublished(event: React.FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/posts/${post.id}/manual-published`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ permalink: permalink.trim() || undefined }),
-      });
-      if (!response.ok) {
-        throw new Error(await readError(response, "Could not mark the post as published."));
-      }
-      toast.success("Marked as published. Cadence will clean up the media later.");
-      setDialog(null);
-      router.refresh();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not mark the post as published.");
     } finally {
       setBusy(false);
     }
@@ -253,23 +195,13 @@ export function PostActions({
             </>
           )
         ) : (
-          <>
-            <Link
-              href={`/queue/${post.id}`}
-              className={buttonVariants({ variant: "secondary", size: "sm" })}
-            >
-              <PenLine />
-              Edit
-            </Link>
-            <Button variant="ghost" size="sm" onClick={() => open("retry")}>
-              <RefreshCw />
-              Retry
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => open("manual")}>
-              <CheckCircle2 />
-              Mark published
-            </Button>
-          </>
+          <Link
+            href={`/queue/${post.id}`}
+            className={buttonVariants({ variant: "secondary", size: "sm" })}
+          >
+            <PenLine />
+            Edit
+          </Link>
         )}
       </div>
 
@@ -411,100 +343,6 @@ export function PostActions({
                 </Button>
               </DialogFooter>
             </div>
-          ) : null}
-
-          {dialog === "retry" ? (
-            <div className="space-y-5">
-              <DialogHeader>
-                <DialogTitle>Retry publishing</DialogTitle>
-                <DialogDescription>
-                  The post is returned to the queue and the worker attempts it again.
-                </DialogDescription>
-              </DialogHeader>
-
-              {post.last_error ? (
-                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-[11.5px] leading-relaxed text-red-900">
-                  <p className="font-medium">Last error</p>
-                  <p className="mt-1 break-words">{post.last_error}</p>
-                </div>
-              ) : null}
-
-              {isManualRequired ? (
-                <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3.5 text-[11.5px] leading-relaxed text-amber-950">
-                  <p>
-                    This post needs manual attention. Its outcome may be unknown, so Cadence did not
-                    retry it automatically.
-                  </p>
-                  <label className="flex items-start gap-2 font-medium">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5 size-3.5 accent-amber-700"
-                      checked={verified}
-                      onChange={(event) => setVerified(event.target.checked)}
-                    />
-                    I checked LinkedIn and this post is not there.
-                  </label>
-                </div>
-              ) : (
-                <p className="text-[11.5px] text-muted-foreground">
-                  If the previous failure was a token or permission error, fix that in Settings
-                  first. Retrying will not help until the connection works.
-                </p>
-              )}
-
-              {error ? <Alert tone="danger" title="Could not retry">{error}</Alert> : null}
-
-              <DialogFooter>
-                <Button variant="secondary" onClick={close} disabled={busy}>
-                  Close
-                </Button>
-                <Button
-                  onClick={onRetry}
-                  disabled={busy || (isManualRequired && !verified)}
-                >
-                  {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                  Retry post
-                </Button>
-              </DialogFooter>
-            </div>
-          ) : null}
-
-          {dialog === "manual" ? (
-            <form onSubmit={onManualPublished} className="space-y-5">
-              <DialogHeader>
-                <DialogTitle>Mark as published manually</DialogTitle>
-                <DialogDescription>
-                  Use this only after you have published the post yourself, for example from
-                  LinkedIn or a failed schedule. Cadence records it without calling the API.
-                </DialogDescription>
-              </DialogHeader>
-
-              <div className="space-y-2">
-                <Label htmlFor="permalink">LinkedIn post URL (optional)</Label>
-                <Input
-                  id="permalink"
-                  value={permalink}
-                  onChange={(event) => setPermalink(event.target.value)}
-                  placeholder="https://www.linkedin.com/feed/update/…"
-                  disabled={busy}
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  The URL is shown on the Published page. Leave it blank if you do not have it.
-                </p>
-              </div>
-
-              {error ? <Alert tone="danger" title="Could not save">{error}</Alert> : null}
-
-              <DialogFooter>
-                <Button variant="secondary" onClick={close} disabled={busy}>
-                  Close
-                </Button>
-                <Button type="submit" disabled={busy}>
-                  {busy ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
-                  Mark published
-                </Button>
-              </DialogFooter>
-            </form>
           ) : null}
         </DialogContent>
       </Dialog>

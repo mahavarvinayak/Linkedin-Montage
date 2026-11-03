@@ -43,23 +43,34 @@ export async function POST(
 
   if (!post) return apiError("Post not found.", 404);
 
+  const recoverable = (status: string) =>
+    status === "failed" || status === "manual_required";
+
+  if (parsed.data.destinationId) {
+    const attached = jobs.find((job) => job.destination_id === parsed.data.destinationId);
+    if (!attached) {
+      return apiError("That destination is not attached to this post.", 404);
+    }
+    if (attached.status === "published") {
+      return apiError("That destination is already recorded as published.", 409);
+    }
+    if (!recoverable(attached.status)) {
+      return apiError(
+        "Only destinations that failed or need attention can be marked as published manually.",
+        409,
+      );
+    }
+  }
+
   const targets = parsed.data.destinationId
     ? jobs.filter((job) => job.destination_id === parsed.data.destinationId)
-    : jobs.filter((job) => job.status === "failed" || job.status === "manual_required");
-
-  if (parsed.data.destinationId && targets.length === 0) {
-    return apiError("That destination is not attached to this post.", 404);
-  }
+    : jobs.filter((job) => recoverable(job.status));
 
   if (targets.length === 0) {
     return apiError(
       "Only destinations that failed or need attention can be marked as published.",
       409,
     );
-  }
-
-  if (targets.some((job) => job.status === "published")) {
-    return apiError("That destination is already recorded as published.", 409);
   }
 
   const now = new Date().toISOString();
