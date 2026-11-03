@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 const STATE_COOKIE = "linkedin_oauth_state";
 
-export async function GET() {
+export async function GET(request: Request) {
   const auth = await requireAdminApi();
   if (!auth.ok) return auth.response;
 
@@ -23,6 +23,9 @@ export async function GET() {
     return apiError("No LinkedIn OAuth scopes are configured.", 503);
   }
 
+  const { searchParams } = new URL(request.url);
+  const prompt = searchParams.get("prompt");
+
   const state = randomBytes(24).toString("hex");
   const authorizeUrl = new URL("https://www.linkedin.com/oauth/v2/authorization");
   authorizeUrl.searchParams.set("response_type", "code");
@@ -30,6 +33,9 @@ export async function GET() {
   authorizeUrl.searchParams.set("redirect_uri", redirectUri);
   authorizeUrl.searchParams.set("state", state);
   authorizeUrl.searchParams.set("scope", scopes.join(" "));
+  if (prompt) {
+    authorizeUrl.searchParams.set("prompt", prompt);
+  }
 
   const response = NextResponse.redirect(authorizeUrl.toString(), { status: 302 });
   response.cookies.set(STATE_COOKIE, state, {

@@ -131,7 +131,7 @@ export function LinkedInConnectionPanel({
         <div className="flex flex-wrap items-center gap-2">
           {configured ? (
             <a
-              href="/api/linkedin/authorize"
+              href="/api/linkedin/authorize?prompt=login"
               className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:bg-blue-800"
             >
               <Plus className="size-3.5" />
@@ -182,6 +182,7 @@ export function LinkedInConnectionPanel({
               {accounts.map((acc) => {
                 const isAccExpired =
                   acc.token_expires_at && Date.parse(acc.token_expires_at) < Date.now();
+                const tokenMissing = acc.has_token === false;
                 return (
                   <div key={acc.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-3">
@@ -208,16 +209,33 @@ export function LinkedInConnectionPanel({
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <span
-                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${
-                          isAccExpired
-                            ? "bg-red-50 text-red-700 ring-red-200"
-                            : "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                        }`}
-                      >
-                        {isAccExpired ? <XCircle className="size-3" /> : <CheckCircle2 className="size-3" />}
-                        {isAccExpired ? "Expired" : "Active"}
-                      </span>
+                      {tokenMissing ? (
+                        <>
+                          <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 bg-amber-50 text-amber-700 ring-amber-200">
+                            <XCircle className="size-3" />
+                            Needs Re-auth
+                          </span>
+                          <a
+                            href="/api/linkedin/authorize?prompt=login"
+                            className="inline-flex h-7 items-center justify-center gap-1 rounded bg-blue-600 px-2 text-[11px] font-medium text-white hover:bg-blue-700"
+                            title="Log into LinkedIn with this profile to connect its publishing token"
+                          >
+                            <RefreshCw className="size-3" />
+                            Reconnect
+                          </a>
+                        </>
+                      ) : (
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${
+                            isAccExpired
+                              ? "bg-red-50 text-red-700 ring-red-200"
+                              : "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                          }`}
+                        >
+                          {isAccExpired ? <XCircle className="size-3" /> : <CheckCircle2 className="size-3" />}
+                          {isAccExpired ? "Expired" : "Ready to Publish"}
+                        </span>
+                      )}
 
                       <Button
                         variant="ghost"

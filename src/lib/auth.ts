@@ -1,3 +1,4 @@
+import { cache } from "react";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { redirect } from "next/navigation";
@@ -38,10 +39,10 @@ export async function getSessionUser(): Promise<User | null> {
   return user ?? null;
 }
 
-export async function requireAdminPage(): Promise<{
+export const requireAdminPage = cache(async (): Promise<{
   supabase: SupabaseClient;
   user: User;
-}> {
+}> => {
   if (!isSupabaseConfigured()) {
     redirect("/login?error=not_configured");
   }
@@ -57,7 +58,7 @@ export async function requireAdminPage(): Promise<{
   if (!allowed) redirect("/login?error=unauthorized");
 
   return { supabase, user };
-}
+});
 
 export type ApiAdminResult =
   | { ok: true; supabase: SupabaseClient; user: User }

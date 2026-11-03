@@ -3,8 +3,7 @@ import { getNavCounts } from "@/lib/queries";
 import { AppSidebar } from "@/components/app-sidebar";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { user } = await requireAdminPage();
-  const counts = await getNavCounts();
+  const [{ user }, counts] = await Promise.all([requireAdminPage(), getNavCounts()]);
 
   return (
     <div className="min-h-screen">

@@ -104,6 +104,7 @@ export interface LinkedInAccountRow {
   last_error: string | null;
   connected_at: string;
   updated_at: string;
+  has_token?: boolean;
 }
 
 export interface PublishingJobRow {

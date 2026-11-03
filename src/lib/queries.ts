@@ -138,7 +138,7 @@ export async function getPost(id: string): Promise<PostView | null> {
  * Every destination, whatever its state, so the management screen can explain
  * unavailable or unauthorized entries instead of hiding them.
  */
-export async function listDestinations(): Promise<DestinationRow[]> {
+export const listDestinations = cache(async (): Promise<DestinationRow[]> => {
   const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase
     .from("linkedin_destinations")
@@ -154,7 +154,7 @@ export async function listDestinations(): Promise<DestinationRow[]> {
     if (b.destination_type === "personal_profile" && a.destination_type !== "personal_profile") return 1;
     return a.name.localeCompare(b.name);
   });
-}
+});
 
 export function splitDestinations(destinations: DestinationRow[]): {
   selectable: DestinationRow[];
@@ -166,12 +166,12 @@ export function splitDestinations(destinations: DestinationRow[]): {
   };
 }
 
-export async function getDestinationStats(): Promise<{
+export const getDestinationStats = cache(async (): Promise<{
   total: number;
   selectable: number;
   unavailable: number;
   missingPermission: number;
-}> {
+}> => {
   try {
     const destinations = await listDestinations();
     return {
@@ -185,7 +185,7 @@ export async function getDestinationStats(): Promise<{
   } catch {
     return { total: 0, selectable: 0, unavailable: 0, missingPermission: 0 };
   }
-}
+});
 
 export async function listRecentLogs(limit = 10): Promise<PublishingLogRow[]> {
   const supabase = await createServerSupabaseClient();
@@ -213,25 +213,29 @@ export const getSettingsRow = cache(async (): Promise<SettingsRow | null> => {
   return (data as SettingsRow | null) ?? null;
 });
 
-export async function getNavCounts(): Promise<{ queue: number; failed: number }> {
+export const getNavCounts = cache(async (): Promise<{ queue: number; failed: number }> => {
   try {
     const supabase = await createServerSupabaseClient();
-    const [queue, failed] = await Promise.all([
-      supabase
-        .from("posts")
-        .select("*", { count: "exact", head: true })
-        .in("status", ["draft", "scheduled", "publishing"]),
-      supabase
-        .from("posts")
-        .select("*", { count: "exact", head: true })
-        .in("status", ["failed", "manual_required"]),
-    ]);
+    const { data } = await supabase
+      .from("posts")
+      .select("status")
+      .in("status", ["draft", "scheduled", "publishing", "failed", "manual_required"]);
 
-    return { queue: queue.count ?? 0, failed: failed.count ?? 0 };
+    let queue = 0;
+    let failed = 0;
+    for (const row of data ?? []) {
+      if (row.status === "failed" || row.status === "manual_required") {
+        failed++;
+      } else {
+        queue++;
+      }
+    }
+
+    return { queue, failed };
   } catch {
     return { queue: 0, failed: 0 };
   }
-}
+});
 
 export interface OverviewData {
   counts: {
@@ -252,24 +256,8 @@ export async function getOverviewData(): Promise<OverviewData> {
   const supabase = await createServerSupabaseClient();
   const monthStart = startOfMonthISTIso();
 
-  const [scheduled, drafts, published, failed, upcoming, destinationStats] = await Promise.all([
-    supabase
-      .from("posts")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "scheduled"),
-    supabase
-      .from("posts")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "draft"),
-    supabase
-      .from("posts")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "published")
-      .gte("published_at", monthStart),
-    supabase
-      .from("posts")
-      .select("*", { count: "exact", head: true })
-      .in("status", ["failed", "manual_required"]),
+  const [postsRes, upcoming, destinationStats, logs] = await Promise.all([
+    supabase.from("posts").select("status, published_at"),
     supabase
       .from("posts")
       .select(POST_SELECT)
@@ -278,23 +266,38 @@ export async function getOverviewData(): Promise<OverviewData> {
       .order("scheduled_at", { ascending: true })
       .limit(5),
     getDestinationStats(),
+    listRecentLogs(8),
   ]);
 
   if (upcoming.error) throw new Error(upcoming.error.message);
 
+  let scheduled = 0;
+  let drafts = 0;
+  let publishedThisMonth = 0;
+  let failed = 0;
+
+  for (const post of (postsRes.data ?? []) as { status: string; published_at: string | null }[]) {
+    if (post.status === "scheduled") scheduled++;
+    else if (post.status === "draft") drafts++;
+    else if (post.status === "failed" || post.status === "manual_required") failed++;
+    else if (post.status === "published" && post.published_at && post.published_at >= monthStart) {
+      publishedThisMonth++;
+    }
+  }
+
   return {
     counts: {
-      scheduled: scheduled.count ?? 0,
-      drafts: drafts.count ?? 0,
-      publishedThisMonth: published.count ?? 0,
-      failed: failed.count ?? 0,
+      scheduled,
+      drafts,
+      publishedThisMonth,
+      failed,
     },
     destinations: {
       total: destinationStats.total,
       selectable: destinationStats.selectable,
     },
     upcoming: await decoratePosts((upcoming.data ?? []) as unknown as Record<string, unknown>[]),
-    logs: await listRecentLogs(8),
+    logs,
   };
 }
 
@@ -329,9 +332,10 @@ export async function getIntegrationStatus(): Promise<IntegrationStatus> {
   let anyAccountConnected = false;
 
   try {
-    settings = await getSettingsRow();
+    const [settingsRow, destStats] = await Promise.all([getSettingsRow(), getDestinationStats()]);
+    settings = settingsRow;
     dbReady = Boolean(settings);
-    destinationStats = await getDestinationStats();
+    destinationStats = destStats;
   } catch (error) {
     storageError = error instanceof Error ? error.message : "Database check failed";
   }
@@ -339,22 +343,22 @@ export async function getIntegrationStatus(): Promise<IntegrationStatus> {
   const admin = tryCreateAdminClient();
   if (admin) {
     try {
-      const bucket = await admin.storage.getBucket("media");
-      bucketReady = !bucket.error;
-      if (bucket.error) storageError = bucket.error.message;
+      const [bucketRes, adminsRes, accountsRes] = await Promise.all([
+        admin.storage.getBucket("media").catch((err) => ({ error: err })),
+        admin.from("app_admins").select("*", { count: "exact", head: true }),
+        admin
+          .from("linkedin_accounts")
+          .select("*", { count: "exact", head: true })
+          .neq("status", "disconnected"),
+      ]);
+
+      bucketReady = !bucketRes.error;
+      if (bucketRes.error) storageError = bucketRes.error.message;
+      adminSeeded = (adminsRes.count ?? 0) > 0;
+      anyAccountConnected = (accountsRes.count ?? 0) > 0;
     } catch (error) {
-      storageError = error instanceof Error ? error.message : "Storage check failed";
+      storageError = error instanceof Error ? error.message : "Diagnostics check failed";
     }
-
-    const admins = await admin.from("app_admins").select("*", { count: "exact", head: true });
-    adminSeeded = (admins.count ?? 0) > 0;
-
-    const connectedAccounts = await admin
-      .from("linkedin_accounts")
-      .select("*", { count: "exact", head: true })
-      .neq("status", "disconnected");
-
-    anyAccountConnected = (connectedAccounts.count ?? 0) > 0;
   }
 
   const expiresAt = settings?.linkedin_token_expires_at
@@ -392,8 +396,9 @@ export async function getIntegrationStatus(): Promise<IntegrationStatus> {
   };
 }
 
-export async function listLinkedInAccounts(): Promise<LinkedInAccountRow[]> {
+export const listLinkedInAccounts = cache(async (): Promise<LinkedInAccountRow[]> => {
   const supabase = await createServerSupabaseClient();
+  const admin = tryCreateAdminClient();
   const { data, error } = await supabase
     .from("linkedin_accounts")
     .select("*")
@@ -403,5 +408,25 @@ export async function listLinkedInAccounts(): Promise<LinkedInAccountRow[]> {
     console.error("Could not load linkedin accounts", error.message);
     return [];
   }
-  return data ?? [];
-}
+
+  const rows = (data ?? []) as LinkedInAccountRow[];
+  if (!admin || rows.length === 0) return rows;
+
+  const checked = await Promise.all(
+    rows.map(async (acc) => {
+      try {
+        const { data: token } = await admin.rpc("admin_get_account_tokens", {
+          p_member_urn: acc.member_urn,
+        });
+        return {
+          ...acc,
+          has_token: Boolean(token && (token as any).access_token),
+        };
+      } catch {
+        return { ...acc, has_token: false };
+      }
+    }),
+  );
+
+  return checked;
+});
