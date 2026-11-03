@@ -206,10 +206,13 @@ function syncNotes(result: Omit<DestinationSyncResult, "ok" | "message">) {
  * stored as `permission_missing` with an explanation rather than being treated
  * as a working connection.
  */
-export async function syncDestinations(admin: SupabaseClient): Promise<DestinationSyncResult> {
+export async function syncDestinations(
+  admin: SupabaseClient,
+  targetMemberUrn?: string | null,
+): Promise<DestinationSyncResult> {
   let access;
   try {
-    access = await loadLinkedInAccess(admin);
+    access = await loadLinkedInAccess(admin, targetMemberUrn);
   } catch (error) {
     if (error instanceof LinkedInTokenError) {
       throw new DestinationSyncError(error.message, error.code === "not_connected" ? 409 : 401);
@@ -223,6 +226,7 @@ export async function syncDestinations(admin: SupabaseClient): Promise<Destinati
 
   const personal = {
     author_urn: access.memberUrn,
+    account_urn: access.memberUrn,
     name: access.memberName?.trim() || "Personal profile",
     destination_type: "personal_profile" as DestinationType,
     publish_scope: MEMBER_PUBLISH_SCOPE,
@@ -271,6 +275,7 @@ export async function syncDestinations(admin: SupabaseClient): Promise<Destinati
           author_urn: organizationUrn,
           organization_urn: organizationUrn,
           organization_id: organizationId,
+          account_urn: access.memberUrn,
           name: organizationName(details, organizationId),
           destination_type: type,
           member_role: acl.role ?? "ADMINISTRATOR",

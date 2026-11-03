@@ -1,6 +1,7 @@
 import { cache } from "react";
 import type {
   DestinationRow,
+  LinkedInAccountRow,
   PostJobView,
   PostStatus,
   PostView,
@@ -379,4 +380,18 @@ export async function getIntegrationStatus(): Promise<IntegrationStatus> {
       lastError: settings?.destinations_last_error ?? null,
     },
   };
+}
+
+export async function listLinkedInAccounts(): Promise<LinkedInAccountRow[]> {
+  const supabase = await createServerSupabaseClient();
+  const { data, error } = await supabase
+    .from("linkedin_accounts")
+    .select("*")
+    .order("connected_at", { ascending: false });
+
+  if (error) {
+    console.error("Could not load linkedin accounts", error.message);
+    return [];
+  }
+  return data ?? [];
 }

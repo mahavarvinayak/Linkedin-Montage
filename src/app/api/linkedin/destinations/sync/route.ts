@@ -23,7 +23,20 @@ export async function POST() {
   }
 
   try {
-    const result = await syncDestinations(admin);
+    const { data: accounts } = await admin
+      .from("linkedin_accounts")
+      .select("member_urn")
+      .eq("status", "connected");
+
+    let result = null;
+    if (accounts && accounts.length > 0) {
+      for (const acc of accounts) {
+        result = await syncDestinations(admin, acc.member_urn);
+      }
+    } else {
+      result = await syncDestinations(admin);
+    }
+
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof DestinationSyncError) {

@@ -21,6 +21,7 @@ type Job = {
   author_urn: string;
   destination_name: string;
   destination_type: string;
+  destination_account_urn?: string | null;
   job_status: string;
   attempts: number;
   max_attempts: number;
@@ -422,7 +423,19 @@ Deno.serve(async (req) => {
 
   for (const job of jobs) {
     try {
-      const outcome = await publishJob(admin, job, accessToken);
+      let jobToken = accessToken;
+      const targetUrn =
+        job.destination_account_urn ||
+        (job.destination_type === "personal_profile" ? job.author_urn : null);
+      if (targetUrn) {
+        try {
+          const identity = await getPublishingIdentity(admin, targetUrn);
+          jobToken = identity.accessToken;
+        } catch {
+          // fallback to default accessToken
+        }
+      }
+      const outcome = await publishJob(admin, job, jobToken);
       summary[outcome] += 1;
     } catch (error) {
       // A crash here leaves the job in "publishing"; the next run's stale

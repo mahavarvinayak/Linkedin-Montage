@@ -35,6 +35,7 @@ function splitScopes(value: string | null | undefined): string[] {
 async function refreshTokens(
   admin: SupabaseClient,
   tokens: TokenRecord,
+  memberUrn?: string | null,
 ): Promise<{ accessToken: string; scopes: string[] }> {
   const { clientId, clientSecret } = getLinkedInEnv();
 
@@ -88,18 +89,38 @@ async function refreshTokens(
     : null;
   const scopes = splitScopes(payload.scope ?? tokens.scope ?? null);
 
-  const stored = await admin.rpc("admin_store_linkedin_tokens", {
-    p_access_token: payload.access_token,
-    p_refresh_token: payload.refresh_token ?? tokens.refresh_token,
-    p_expires_at: expiresAt,
-    p_scope: payload.scope ?? tokens.scope ?? null,
-  });
+  if (memberUrn) {
+    await admin.rpc("admin_store_account_tokens", {
+      p_member_urn: memberUrn,
+      p_access_token: payload.access_token,
+      p_refresh_token: payload.refresh_token ?? tokens.refresh_token,
+      p_expires_at: expiresAt,
+      p_scope: payload.scope ?? tokens.scope ?? null,
+    });
 
-  if (stored.error) {
-    throw new LinkedInTokenError(
-      `The refreshed token could not be stored: ${stored.error.message}`,
-      "provider",
-    );
+    await admin
+      .from("linkedin_accounts")
+      .update({
+        token_expires_at: expiresAt,
+        scopes,
+        status: "connected",
+        last_error: null,
+      })
+      .eq("member_urn", memberUrn);
+  } else {
+    const stored = await admin.rpc("admin_store_linkedin_tokens", {
+      p_access_token: payload.access_token,
+      p_refresh_token: payload.refresh_token ?? tokens.refresh_token,
+      p_expires_at: expiresAt,
+      p_scope: payload.scope ?? tokens.scope ?? null,
+    });
+
+    if (stored.error) {
+      throw new LinkedInTokenError(
+        `The refreshed token could not be stored: ${stored.error.message}`,
+        "provider",
+      );
+    }
   }
 
   await admin
@@ -120,7 +141,46 @@ async function refreshTokens(
  * about to expire, and returns everything needed to call LinkedIn. Tokens are
  * read from Supabase Vault with the service role and never leave the server.
  */
-export async function loadLinkedInAccess(admin: SupabaseClient): Promise<LinkedInAccess> {
+export async function loadLinkedInAccess(
+  admin: SupabaseClient,
+  targetMemberUrn?: string | null,
+): Promise<LinkedInAccess> {
+  // If target member URN is requested, search in linkedin_accounts first
+  if (targetMemberUrn) {
+    const { data: account } = await admin
+      .from("linkedin_accounts")
+      .select("member_urn, name, scopes, status")
+      .eq("member_urn", targetMemberUrn)
+      .maybeSingle();
+
+    const { data: tokens, error: tokenError } = await admin.rpc(
+      "admin_get_account_tokens",
+      { p_member_urn: targetMemberUrn },
+    );
+
+    if (!tokenError && tokens?.access_token) {
+      const record = tokens as TokenRecord;
+      const expiresAt = record.expires_at ? Date.parse(record.expires_at) : null;
+      let accessToken: string = record.access_token!;
+      let scopes = splitScopes(record.scope ?? account?.scopes?.join(" ") ?? null);
+
+      if (expiresAt && expiresAt < Date.now() + 120_000) {
+        const refreshed = await refreshTokens(admin, record, targetMemberUrn);
+        accessToken = refreshed.accessToken;
+        scopes = refreshed.scopes.length > 0 ? refreshed.scopes : scopes;
+      }
+
+      const memberId = targetMemberUrn.replace(/^urn:li:person:/, "");
+      return {
+        accessToken,
+        scopes,
+        memberId,
+        memberUrn: targetMemberUrn,
+        memberName: account?.name ?? null,
+      };
+    }
+  }
+
   const { data: settings, error } = await admin
     .from("settings")
     .select(

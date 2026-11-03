@@ -190,14 +190,20 @@ export async function getConnectionStatus(admin: AdminClient): Promise<{
   };
 }
 
-export async function getPublishingIdentity(admin: AdminClient): Promise<PublishingIdentity> {
+export async function getPublishingIdentity(
+  admin: AdminClient,
+  accountUrn?: string | null,
+): Promise<PublishingIdentity> {
   const settings = await getSettings(admin);
 
-  if (!settings.linkedin_connected || !settings.linkedin_member_id) {
-    throw new LinkedInError("LinkedIn is not connected.", { kind: "not_connected" });
+  let tokens = await rpcJson<Tokens | null>(admin, "admin_get_account_tokens", {
+    p_member_urn: accountUrn || null,
+  }).catch(() => null);
+
+  if (!tokens?.access_token) {
+    tokens = await rpcJson<Tokens | null>(admin, "admin_get_linkedin_tokens").catch(() => null);
   }
 
-  const tokens = await rpcJson<Tokens | null>(admin, "admin_get_linkedin_tokens");
   if (!tokens?.access_token) {
     throw new LinkedInError("No LinkedIn access token is stored. Reconnect your account.", {
       kind: "not_connected",
@@ -211,7 +217,7 @@ export async function getPublishingIdentity(admin: AdminClient): Promise<Publish
     accessToken = await refreshAccessToken(admin, tokens);
   }
 
-  const memberId = settings.linkedin_member_id.replace(/^urn:li:person:/, "");
+  const memberId = (accountUrn || settings.linkedin_member_id || "").replace(/^urn:li:person:/, "");
 
   return {
     accessToken,

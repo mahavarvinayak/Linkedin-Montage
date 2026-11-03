@@ -154,7 +154,14 @@ export async function GET(request: Request) {
       .split(/[\s,]+/)
       .filter(Boolean);
 
-    const stored = await admin.rpc("admin_store_linkedin_tokens", {
+    const memberUrn = `urn:li:person:${profile.sub}`;
+    const name =
+      profile.name ||
+      [profile.given_name, profile.family_name].filter(Boolean).join(" ") ||
+      null;
+
+    const stored = await admin.rpc("admin_store_account_tokens", {
+      p_member_urn: memberUrn,
       p_access_token: tokens.access_token,
       p_refresh_token: tokens.refresh_token ?? null,
       p_expires_at: expiresAt,
@@ -169,10 +176,20 @@ export async function GET(request: Request) {
       });
     }
 
-    const name =
-      profile.name ||
-      [profile.given_name, profile.family_name].filter(Boolean).join(" ") ||
-      null;
+    // Upsert into linkedin_accounts
+    await admin.from("linkedin_accounts").upsert(
+      {
+        member_urn: memberUrn,
+        name: name || "Personal profile",
+        picture: profile.picture ?? null,
+        token_expires_at: expiresAt,
+        scopes: scopeList,
+        status: "connected",
+        last_error: null,
+        connected_at: new Date().toISOString(),
+      },
+      { onConflict: "member_urn" },
+    );
 
     const { error } = await admin
       .from("settings")
@@ -205,7 +222,7 @@ export async function GET(request: Request) {
     // second manual step. A failure here must not invalidate the connection.
     let note: string | undefined;
     try {
-      const synced = await syncDestinations(admin);
+      const synced = await syncDestinations(admin, memberUrn);
       note = synced.permissionWarning ?? undefined;
     } catch (error) {
       note =

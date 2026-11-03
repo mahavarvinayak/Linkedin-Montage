@@ -12,7 +12,7 @@ import { Card } from "@/components/ui/card";
 import { CopyButton } from "@/components/copy-button";
 import { PageHeader } from "@/components/page-header";
 import { LinkedInConnectionPanel, TelegramPanel } from "@/components/settings-panels";
-import { getIntegrationStatus } from "@/lib/queries";
+import { getIntegrationStatus, listLinkedInAccounts } from "@/lib/queries";
 import { MEDIA_BUCKET } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
@@ -47,7 +47,11 @@ export default async function SettingsPage({
 }: {
   searchParams: Promise<{ linkedin?: string; message?: string }>;
 }) {
-  const [status, params] = await Promise.all([getIntegrationStatus(), searchParams]);
+  const [status, accounts, params] = await Promise.all([
+    getIntegrationStatus(),
+    listLinkedInAccounts(),
+    searchParams,
+  ]);
   const env = status.environment;
 
   return (
@@ -55,7 +59,7 @@ export default async function SettingsPage({
       <PageHeader
         eyebrow="Configuration"
         title="Settings"
-        description="Connect LinkedIn, tune notifications and verify that this private workspace is configured correctly."
+        description="Connect LinkedIn, manage multiple profiles, tune notifications and verify that this private workspace is configured correctly."
       />
 
       {params.linkedin === "connected" ? (
@@ -70,10 +74,11 @@ export default async function SettingsPage({
       ) : null}
 
       <section className="space-y-3">
-        <h2 className="text-[15px] font-semibold tracking-[-0.015em]">LinkedIn</h2>
+        <h2 className="text-[15px] font-semibold tracking-[-0.015em]">LinkedIn Profiles & Accounts</h2>
         <LinkedInConnectionPanel
           configured={env.linkedin.configured}
           settings={status.settings}
+          accounts={accounts}
           tokenExpired={status.tokenExpired}
           tokenExpiringSoon={status.tokenExpiringSoon}
         />

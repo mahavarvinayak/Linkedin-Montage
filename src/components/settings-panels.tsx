@@ -7,9 +7,11 @@ import {
   ExternalLink,
   Loader2,
   Plug,
+  Plus,
   RefreshCw,
   Send,
   ShieldCheck,
+  Trash2,
   Unplug,
   XCircle,
 } from "lucide-react";
@@ -30,7 +32,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { formatIST, relativeTime } from "@/lib/ist";
-import type { SettingsRow } from "@/lib/types";
+import type { LinkedInAccountRow, SettingsRow } from "@/lib/types";
 
 async function readError(response: Response, fallback: string): Promise<string> {
   const payload = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -40,22 +42,25 @@ async function readError(response: Response, fallback: string): Promise<string> 
 export function LinkedInConnectionPanel({
   configured,
   settings,
+  accounts = [],
   tokenExpired,
   tokenExpiringSoon,
 }: {
   configured: boolean;
   settings: SettingsRow | null;
+  accounts?: LinkedInAccountRow[];
   tokenExpired: boolean;
   tokenExpiringSoon: boolean;
 }) {
   const router = useRouter();
   const [testing, setTesting] = useState(false);
-  const [disconnecting, setDisconnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmAccountUrn, setConfirmAccountUrn] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
 
-  const connected = Boolean(settings?.linkedin_connected);
+  const connected = Boolean(settings?.linkedin_connected) || accounts.length > 0;
 
   async function onTest() {
     setTesting(true);
@@ -79,19 +84,24 @@ export function LinkedInConnectionPanel({
     }
   }
 
-  async function onDisconnect() {
-    setDisconnecting(true);
+  async function onDisconnect(targetUrn?: string | null) {
+    setDisconnecting(targetUrn || "all");
     setError(null);
     try {
-      const response = await fetch("/api/linkedin/disconnect", { method: "POST" });
+      const response = await fetch("/api/linkedin/disconnect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(targetUrn ? { member_urn: targetUrn } : {}),
+      });
       if (!response.ok) throw new Error(await readError(response, "Could not disconnect LinkedIn."));
-      toast.success("LinkedIn disconnected.");
+      toast.success(targetUrn ? "Account disconnected." : "All accounts disconnected.");
       setConfirmOpen(false);
+      setConfirmAccountUrn(null);
       router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not disconnect LinkedIn.");
     } finally {
-      setDisconnecting(false);
+      setDisconnecting(null);
     }
   }
 
@@ -109,44 +119,47 @@ export function LinkedInConnectionPanel({
             <Plug className="size-4" />
           </span>
           <div>
-            <p className="text-[13.5px] font-medium">LinkedIn profile</p>
+            <p className="text-[13.5px] font-medium">LinkedIn profiles & accounts</p>
             <p className="text-[11px] text-muted-foreground">
-              Official API · posting as a member
+              {accounts.length > 0
+                ? `${accounts.length} connected ${accounts.length === 1 ? "profile" : "profiles"}`
+                : "Official API · posting as a member"}
             </p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {connected ? (
-            <>
-              <Button variant="secondary" size="sm" onClick={onTest} disabled={testing || disconnecting}>
-                {testing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                Test connection
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => setConfirmOpen(true)}
-                disabled={testing || disconnecting}
-              >
-                <Unplug />
-                Disconnect
-              </Button>
-            </>
-          ) : (
+          {configured ? (
             <a
               href="/api/linkedin/authorize"
-              aria-disabled={!configured}
-              className={`inline-flex h-8 items-center justify-center gap-2 rounded-md px-2.5 text-xs font-medium transition-colors ${
-                configured
-                  ? "bg-primary text-primary-foreground hover:bg-blue-800"
-                  : "pointer-events-none bg-stone-200 text-stone-500"
-              }`}
+              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:bg-blue-800"
             >
-              <ExternalLink className="size-3.5" />
-              Connect LinkedIn
+              <Plus className="size-3.5" />
+              {connected ? "Connect another profile" : "Connect LinkedIn"}
             </a>
-          )}
+          ) : null}
+
+          {connected ? (
+            <>
+              <Button variant="secondary" size="sm" onClick={onTest} disabled={testing || Boolean(disconnecting)}>
+                {testing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                Test
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setConfirmAccountUrn(null);
+                  setConfirmOpen(true);
+                }}
+                disabled={testing || Boolean(disconnecting)}
+                className="text-stone-500 hover:text-red-600"
+              >
+                <Unplug />
+                Disconnect all
+              </Button>
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -160,7 +173,72 @@ export function LinkedInConnectionPanel({
           </Alert>
         ) : null}
 
-        {connected ? (
+        {accounts.length > 0 ? (
+          <div className="space-y-3">
+            <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+              Connected profiles ({accounts.length})
+            </p>
+            <div className="divide-y divide-border rounded-lg border border-border bg-white">
+              {accounts.map((acc) => {
+                const isAccExpired =
+                  acc.token_expires_at && Date.parse(acc.token_expires_at) < Date.now();
+                return (
+                  <div key={acc.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-3">
+                      {acc.picture ? (
+                        <img
+                          src={acc.picture}
+                          alt=""
+                          className="size-10 rounded-full border border-stone-200 object-cover"
+                        />
+                      ) : (
+                        <span className="flex size-10 items-center justify-center rounded-full bg-stone-100 text-[12px] font-medium uppercase text-stone-600 ring-1 ring-stone-200">
+                          {acc.name.slice(0, 1)}
+                        </span>
+                      )}
+                      <div className="min-w-0">
+                        <p className="truncate text-[13px] font-medium text-foreground">{acc.name}</p>
+                        <p className="truncate font-mono text-[10.5px] text-muted-foreground">{acc.member_urn}</p>
+                        {acc.token_expires_at ? (
+                          <p className="text-[10.5px] text-stone-500">
+                            Expires {relativeTime(acc.token_expires_at)}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${
+                          isAccExpired
+                            ? "bg-red-50 text-red-700 ring-red-200"
+                            : "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                        }`}
+                      >
+                        {isAccExpired ? <XCircle className="size-3" /> : <CheckCircle2 className="size-3" />}
+                        {isAccExpired ? "Expired" : "Active"}
+                      </span>
+
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={Boolean(disconnecting)}
+                        onClick={() => {
+                          setConfirmAccountUrn(acc.member_urn);
+                          setConfirmOpen(true);
+                        }}
+                        className="size-8 p-0 text-stone-400 hover:text-red-600"
+                        title="Disconnect this account"
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : connected ? (
           <>
             <div className="flex items-center gap-3">
               {settings?.linkedin_member_picture ? (
@@ -222,51 +300,6 @@ export function LinkedInConnectionPanel({
                 </p>
               </div>
             </div>
-
-            {tokenExpired ? (
-              <Alert tone="danger" title="The stored token has expired">
-                Reconnect to resume publishing. If a refresh token was issued, Cadence refreshes
-                automatically before expiry; this message means the refresh did not succeed.
-              </Alert>
-            ) : tokenExpiringSoon ? (
-              <Alert tone="warning" title="Token expires within 7 days">
-                Reconnect when convenient to keep unattended publishing uninterrupted.
-              </Alert>
-            ) : null}
-
-            {settings?.linkedin_last_error ? (
-              <Alert tone="danger" title="Last LinkedIn error">
-                {settings.linkedin_last_error}
-              </Alert>
-            ) : null}
-
-            <div>
-              <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                Granted scopes
-              </p>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {(settings?.linkedin_scopes ?? []).length > 0 ? (
-                  settings?.linkedin_scopes.map((scope) => (
-                    <span
-                      key={scope}
-                      className="rounded-md border border-border bg-white px-1.5 py-0.5 font-mono text-[10px] text-stone-600"
-                    >
-                      {scope}
-                    </span>
-                  ))
-                ) : (
-                  <span className="text-[11px] text-muted-foreground">
-                    Scopes were not recorded. Test the connection or reconnect.
-                  </span>
-                )}
-              </div>
-              {settings?.linkedin_scopes && !settings.linkedin_scopes.includes("w_member_social") ? (
-                <p className="mt-2 text-[11px] text-red-700">
-                  w_member_social is missing. Publishing will fail until you reconnect and approve
-                  the posting permission.
-                </p>
-              ) : null}
-            </div>
           </>
         ) : (
           <div className="rounded-lg border border-dashed border-stone-300 bg-stone-50/40 px-4 py-6 text-center">
@@ -279,25 +312,72 @@ export function LinkedInConnectionPanel({
           </div>
         )}
 
-        {error ? <Alert tone="danger" title="LinkedIn connection">{error}</Alert> : null}
-        {result ? <Alert tone="success" title="Connection verified">{result}</Alert> : null}
+        {connected ? (
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              Granted scopes
+            </p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {(settings?.linkedin_scopes ?? []).length > 0 ? (
+                settings?.linkedin_scopes.map((scope) => (
+                  <span
+                    key={scope}
+                    className="rounded-md border border-border bg-white px-1.5 py-0.5 font-mono text-[10px] text-stone-600"
+                  >
+                    {scope}
+                  </span>
+                ))
+              ) : (
+                <span className="text-[11px] text-muted-foreground">
+                  Scopes were not recorded. Test the connection or reconnect.
+                </span>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {tokenExpired ? (
+          <Alert tone="danger" title="The stored token has expired">
+            Reconnect to resume publishing. If a refresh token was issued, Cadence refreshes
+            automatically before expiry; this message means the refresh did not succeed.
+          </Alert>
+        ) : tokenExpiringSoon ? (
+          <Alert tone="warning" title="Token expires within 7 days">
+            Reconnect when convenient to keep unattended publishing uninterrupted.
+          </Alert>
+        ) : null}
+
+        {settings?.linkedin_last_error ? (
+          <Alert tone="danger" title="Last LinkedIn error">
+            {settings.linkedin_last_error}
+          </Alert>
+        ) : null}
+
+        {error ? <Alert tone="danger" title="Connection error">{error}</Alert> : null}
+        {result ? <Alert tone="success" title="Verified">{result}</Alert> : null}
       </div>
 
-      <Dialog open={confirmOpen} onOpenChange={(open) => (open ? null : setConfirmOpen(false))}>
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Disconnect LinkedIn?</DialogTitle>
+            <DialogTitle>
+              {confirmAccountUrn ? "Disconnect account" : "Disconnect all accounts"}
+            </DialogTitle>
             <DialogDescription>
-              Cadence will delete the stored OAuth tokens. Scheduled posts remain in the queue but
-              cannot publish until you reconnect.
+              {confirmAccountUrn
+                ? "This will remove the stored OAuth credentials for this profile. Scheduled jobs targeting this profile will be paused."
+                : "This will remove all stored LinkedIn tokens. Scheduled posts will pause until you connect again."}
             </DialogDescription>
           </DialogHeader>
-          {error ? <Alert tone="danger" title="Could not disconnect">{error}</Alert> : null}
           <DialogFooter>
-            <Button variant="secondary" onClick={() => setConfirmOpen(false)} disabled={disconnecting}>
+            <Button variant="secondary" onClick={() => setConfirmOpen(false)} disabled={Boolean(disconnecting)}>
               Keep connected
             </Button>
-            <Button variant="destructive" onClick={onDisconnect} disabled={disconnecting}>
+            <Button
+              variant="destructive"
+              onClick={() => onDisconnect(confirmAccountUrn)}
+              disabled={Boolean(disconnecting)}
+            >
               {disconnecting ? <Loader2 className="animate-spin" /> : <Unplug />}
               Disconnect
             </Button>

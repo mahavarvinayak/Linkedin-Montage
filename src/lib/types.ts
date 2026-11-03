@@ -76,6 +76,7 @@ export interface DestinationRow {
   author_urn: string;
   organization_urn: string | null;
   organization_id: string | null;
+  account_urn?: string | null;
   name: string;
   destination_type: DestinationType;
   member_role: string | null;
@@ -88,6 +89,20 @@ export interface DestinationRow {
   last_seen_at: string | null;
   last_synced_at: string | null;
   created_at: string;
+  updated_at: string;
+}
+
+export interface LinkedInAccountRow {
+  id: string;
+  member_urn: string;
+  name: string;
+  picture: string | null;
+  email: string | null;
+  token_expires_at: string | null;
+  scopes: string[];
+  status: "connected" | "expired" | "error" | "disconnected";
+  last_error: string | null;
+  connected_at: string;
   updated_at: string;
 }
 
