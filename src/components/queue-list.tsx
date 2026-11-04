@@ -150,8 +150,10 @@ export function QueueList({ posts }: { posts: PostView[] }) {
                     <div className="flex flex-wrap items-center gap-2">
                       <StatusBadge status={post.status} />
                       {post.status === "scheduled" && post.scheduled_at ? (
-                        <span className="text-[11px] text-muted-foreground">
-                          {formatISTTime(post.scheduled_at)} · {relativeTime(post.scheduled_at)}
+                        <span className="inline-flex items-center gap-1.5 rounded-md bg-stone-100 px-2 py-0.5 text-[11px] font-medium text-foreground ring-1 ring-stone-200">
+                          <CalendarClock className="size-3 text-blue-600" />
+                          <span>{formatIST(post.scheduled_at)}</span>
+                          <span className="text-muted-foreground font-normal">({relativeTime(post.scheduled_at)})</span>
                         </span>
                       ) : post.status === "draft" ? (
                         <span className="text-[11px] text-muted-foreground">

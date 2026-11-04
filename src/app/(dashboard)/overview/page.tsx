@@ -257,9 +257,9 @@ export default async function OverviewPage() {
                         )}
                       </p>
                       <div className="mt-1 flex flex-wrap items-center gap-2">
-                        <span className="text-[10.5px] text-muted-foreground">
+                        <span className="text-[10.5px] font-medium text-foreground">
                           {post.scheduled_at
-                            ? `${formatISTTime(post.scheduled_at)} · ${relativeTime(post.scheduled_at)}`
+                            ? `${formatIST(post.scheduled_at)} (${relativeTime(post.scheduled_at)})`
                             : "No time set"}
                         </span>
                         {post.jobs.length > 0 ? (
