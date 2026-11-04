@@ -78,7 +78,7 @@ export const TOOLS: ToolDefinition[] = [
         },
         limit: {
           type: "number",
-          description: "Maximum number of posts to return (default 20, max 100).",
+          description: "Maximum number of posts to return (default 50, max 500).",
         },
         offset: {
           type: "number",

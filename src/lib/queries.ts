@@ -118,7 +118,8 @@ export async function listPosts(
       .order("created_at", { ascending: false });
   }
 
-  const { data, error } = await query.limit(options.limit ?? 100);
+  const limit = options.limit ?? 500;
+  const { data, error } = await query.limit(limit);
   if (error) throw new Error(error.message);
 
   return decoratePosts((data ?? []) as unknown as Record<string, unknown>[]);

@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Published posts" };
 
 export default async function PublishedPage() {
-  const posts = await listPosts(["published"], { orderBy: "published", limit: 100 });
+  const posts = await listPosts(["published"], { orderBy: "published", limit: 500 });
 
   return (
     <div className="space-y-7">

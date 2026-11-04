@@ -196,7 +196,7 @@ export async function executeTool(name: string, args: Record<string, any>): Prom
     }
 
     case "cadence_list_posts": {
-      const limit = Math.min(100, Math.max(1, args.limit || 20));
+      const limit = Math.min(500, Math.max(1, args.limit || 50));
       const offset = Math.max(0, args.offset || 0);
 
       let query = adminClient

@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Failed posts" };
 
 export default async function FailedPage() {
-  const posts = await listPosts(["failed", "manual_required"], { orderBy: "updated" });
+  const posts = await listPosts(["failed", "manual_required"], { orderBy: "updated", limit: 500 });
 
   const manualCount = posts.filter((post) => post.status === "manual_required").length;
 

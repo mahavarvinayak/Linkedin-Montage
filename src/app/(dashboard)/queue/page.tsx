@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Content queue" };
 
 export default async function QueuePage() {
-  const posts = await listPosts(["draft", "scheduled", "publishing", "cancelled"]);
+  const posts = await listPosts(["draft", "scheduled", "publishing", "cancelled"], { limit: 500 });
 
   return (
     <div className="space-y-7">
