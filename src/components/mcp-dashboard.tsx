@@ -182,11 +182,16 @@ npm run mcp`;
     }
 
     if (tab === "http") {
-      return `# 1. List all exposed tools
-curl -X GET http://localhost:3000/api/mcp
+      return `# Online Live Endpoint:
+# https://cadence-bice-two.vercel.app/api/mcp
 
-# 2. Execute any MCP tool via HTTP POST
-curl -X POST http://localhost:3000/api/mcp \\
+# 1. List all exposed tools (JSON-RPC or REST)
+curl -X GET https://cadence-bice-two.vercel.app/api/mcp \\
+  -H "Authorization: Bearer YOUR_SUPABASE_SERVICE_ROLE_KEY"
+
+# 2. Execute an MCP tool via HTTP POST
+curl -X POST https://cadence-bice-two.vercel.app/api/mcp \\
+  -H "Authorization: Bearer YOUR_SUPABASE_SERVICE_ROLE_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
     "name": "cadence_get_status",

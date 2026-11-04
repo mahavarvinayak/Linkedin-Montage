@@ -3,7 +3,8 @@ import type { SupabaseClient, User } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { getAdminEmail, isSupabaseConfigured } from "@/lib/env";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { getAdminEmail, getSupabaseEnv, isSupabaseConfigured } from "@/lib/env";
 
 export async function isAllowedAdmin(
   supabase: SupabaseClient,
@@ -64,7 +65,7 @@ export type ApiAdminResult =
   | { ok: true; supabase: SupabaseClient; user: User }
   | { ok: false; response: NextResponse };
 
-export async function requireAdminApi(): Promise<ApiAdminResult> {
+export async function requireAdminApi(request?: Request): Promise<ApiAdminResult> {
   if (!isSupabaseConfigured()) {
     return {
       ok: false,
@@ -73,6 +74,27 @@ export async function requireAdminApi(): Promise<ApiAdminResult> {
         { status: 503 },
       ),
     };
+  }
+
+  // Check Bearer token or API key if request is passed (allows remote MCP / CLI tools)
+  if (request) {
+    const authHeader = request.headers.get("authorization") || "";
+    const apiKey = request.headers.get("x-api-key") || request.headers.get("apikey") || "";
+    const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    const token = bearer || apiKey;
+
+    const { serviceRoleKey } = getSupabaseEnv();
+    if (serviceRoleKey && token && (token === serviceRoleKey || token.trim() === serviceRoleKey.trim())) {
+      const supabase = createAdminClient();
+      const mockAdminUser: User = {
+        id: "service-role-admin",
+        app_metadata: { role: "service_role" },
+        user_metadata: {},
+        aud: "authenticated",
+        created_at: new Date().toISOString(),
+      } as User;
+      return { ok: true, supabase, user: mockAdminUser };
+    }
   }
 
   const supabase = await createServerSupabaseClient();
